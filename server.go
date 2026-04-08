@@ -1,0 +1,115 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"strings"
+	"time"
+)
+
+type Server struct {
+	board   Board
+	maxSize int64
+	bind    string
+	port    int
+	mux     *http.ServeMux
+	httpSrv *http.Server
+}
+
+func NewServer(board Board, bind string, port int, maxSize int64) *Server {
+	s := &Server{
+		board:   board,
+		maxSize: maxSize,
+		bind:    bind,
+		port:    port,
+		mux:     http.NewServeMux(),
+	}
+	s.mux.HandleFunc("/clip", s.handleClipboard)
+	s.mux.HandleFunc("/health", s.handleHealth)
+
+	s.httpSrv = &http.Server{
+		Addr:         fmt.Sprintf("%s:%d", bind, port),
+		Handler:      s,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+	return s
+}
+
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mux.ServeHTTP(w, r)
+}
+
+func (s *Server) handleClipboard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Check Content-Length header if present
+	if r.ContentLength > s.maxSize {
+		http.Error(w, fmt.Sprintf("payload too large (max %d bytes)", s.maxSize), http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	// Read body with size limit (maxSize + 1 to detect overflow)
+	limited := io.LimitReader(r.Body, s.maxSize+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusInternalServerError)
+		return
+	}
+
+	if int64(len(data)) > s.maxSize {
+		http.Error(w, fmt.Sprintf("payload too large (max %d bytes)", s.maxSize), http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	if len(data) == 0 {
+		http.Error(w, "empty body", http.StatusBadRequest)
+		return
+	}
+
+	contentType := r.Header.Get("Content-Type")
+
+	switch {
+	case strings.HasPrefix(contentType, "text/plain"):
+		if err := s.board.WriteText(data); err != nil {
+			http.Error(w, fmt.Sprintf("clipboard write failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("received text (%d bytes)", len(data))
+
+	case strings.HasPrefix(contentType, "image/png"):
+		if err := s.board.WriteImage(data); err != nil {
+			http.Error(w, fmt.Sprintf("clipboard write failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("received image (%d bytes)", len(data))
+
+	default:
+		http.Error(w, fmt.Sprintf("unsupported content type: %s", contentType), http.StatusUnsupportedMediaType)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "ok")
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"status":"ok","time":"%s"}`, time.Now().Format(time.RFC3339))
+}
+
+func (s *Server) ListenAndServe() error {
+	log.Printf("cliplink daemon listening on %s:%d", s.bind, s.port)
+	return s.httpSrv.ListenAndServe()
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	return s.httpSrv.Shutdown(ctx)
+}
