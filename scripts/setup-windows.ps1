@@ -60,7 +60,8 @@ $config = @"
   "max_size": 10485760
 }
 "@
-$config | Out-File -Encoding utf8 $CONFIG_FILE
+# Write without BOM — PowerShell 5's -Encoding utf8 adds BOM which breaks Go's JSON parser
+[System.IO.File]::WriteAllText($CONFIG_FILE, $config, [System.Text.UTF8Encoding]::new($false))
 Write-Host "  Config: $CONFIG_FILE" -ForegroundColor Green
 Write-Host "  Peer: $MAC_PEER" -ForegroundColor Green
 
@@ -118,7 +119,7 @@ $ahkScript = @"
 }
 "@
 $ahkPath = "$CLIPLINK_DIR\cliplink-hotkey.ahk"
-$ahkScript | Out-File -Encoding utf8 $ahkPath
+[System.IO.File]::WriteAllText($ahkPath, $ahkScript, [System.Text.UTF8Encoding]::new($false))
 
 # Create startup shortcut for AHK script
 $ahkExe = "${env:ProgramFiles}\AutoHotkey\v2\AutoHotkey64.exe"
