@@ -174,7 +174,10 @@ func cmdStatus(args []string) error {
 	}
 
 	url := fmt.Sprintf("http://%s/health", cfg.Peer)
-	httpClient := &http.Client{Timeout: 5 * time.Second}
+	httpClient := &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: &http.Transport{Proxy: nil}, // bypass system proxy — always LAN
+	}
 	resp, err := httpClient.Get(url)
 	if err != nil {
 		return fmt.Errorf("peer unreachable: %w", err)

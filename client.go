@@ -21,7 +21,8 @@ func NewClient(peer string, board Board, maxSize int64) *Client {
 		board:   board,
 		maxSize: maxSize,
 		http: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:   10 * time.Second,
+			Transport: &http.Transport{Proxy: nil}, // bypass system proxy — always LAN
 		},
 	}
 }
