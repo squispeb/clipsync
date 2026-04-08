@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -175,8 +176,13 @@ func cmdStatus(args []string) error {
 
 	url := fmt.Sprintf("http://%s/health", cfg.Peer)
 	httpClient := &http.Client{
-		Timeout:   5 * time.Second,
-		Transport: &http.Transport{Proxy: nil}, // bypass system proxy — always LAN
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			Proxy: nil,
+			DialContext: (&net.Dialer{
+				Timeout: 2 * time.Second,
+			}).DialContext,
+		},
 	}
 	resp, err := httpClient.Get(url)
 	if err != nil {

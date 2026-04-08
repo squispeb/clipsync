@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"time"
 )
@@ -21,8 +22,13 @@ func NewClient(peer string, board Board, maxSize int64) *Client {
 		board:   board,
 		maxSize: maxSize,
 		http: &http.Client{
-			Timeout:   10 * time.Second,
-			Transport: &http.Transport{Proxy: nil}, // bypass system proxy — always LAN
+			Timeout: 15 * time.Second, // total timeout (allows large image transfer)
+			Transport: &http.Transport{
+				Proxy: nil, // bypass system proxy — always LAN
+				DialContext: (&net.Dialer{
+					Timeout: 2 * time.Second, // connect timeout — LAN should respond in <10ms
+				}).DialContext,
+			},
 		},
 	}
 }
