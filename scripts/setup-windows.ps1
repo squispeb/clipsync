@@ -14,6 +14,35 @@ $STARTUP_DIR    = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
 $MAC_PEER       = "100.85.255.70:8275"  # <-- Change to your Mac's Tailscale IP
 $LISTEN_PORT    = 8275
 
+# --- Step 0: Clean previous installation ---
+Write-Host "`n[0/5] Cleaning previous installation..." -ForegroundColor Cyan
+
+# Stop running cliplink processes
+$procs = Get-Process -Name "cliplink" -ErrorAction SilentlyContinue
+if ($procs) {
+    $procs | Stop-Process -Force
+    Write-Host "  Stopped running cliplink processes" -ForegroundColor Yellow
+}
+
+# Remove old files
+foreach ($path in @($CLIPLINK_DIR, $CONFIG_DIR)) {
+    if (Test-Path $path) {
+        Remove-Item $path -Recurse -Force
+        Write-Host "  Removed: $path" -ForegroundColor Yellow
+    }
+}
+foreach ($path in @(
+    "$STARTUP_DIR\cliplink-daemon.vbs",
+    "$STARTUP_DIR\cliplink-hotkey.lnk"
+)) {
+    if (Test-Path $path) {
+        Remove-Item $path -Force
+        Write-Host "  Removed: $path" -ForegroundColor Yellow
+    }
+}
+
+Write-Host "  Clean slate" -ForegroundColor Green
+
 # --- Step 1: Install binary ---
 Write-Host "`n[1/5] Installing cliplink..." -ForegroundColor Cyan
 
