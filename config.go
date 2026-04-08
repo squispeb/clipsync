@@ -25,6 +25,12 @@ func DefaultConfig() Config {
 	}
 }
 
+// isTailscaleIP reports whether ip is in the Tailscale CGNAT range 100.64.0.0/10.
+func isTailscaleIP(ip net.IP) bool {
+	ip4 := ip.To4()
+	return ip4 != nil && ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127
+}
+
 // ResolveBind determines the bind address for the daemon.
 // If bind is already set (from config or --bind flag), use it as-is.
 // Otherwise, auto-detect the Tailscale interface IP (100.64.0.0/10 CGNAT range).
@@ -50,12 +56,8 @@ func ResolveBind(bind string) string {
 			if !ok {
 				continue
 			}
-			ip := ipNet.IP.To4()
-			if ip == nil {
-				continue
-			}
-			// Tailscale CGNAT range: 100.64.0.0/10 (100.64.x.x - 100.127.x.x)
-			if ip[0] == 100 && ip[1] >= 64 && ip[1] <= 127 {
+			if isTailscaleIP(ipNet.IP) {
+				ip := ipNet.IP.To4()
 				log.Printf("auto-detected Tailscale IP: %s", ip.String())
 				return ip.String()
 			}

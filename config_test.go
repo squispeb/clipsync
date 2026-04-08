@@ -1,8 +1,10 @@
 package main
 
 import (
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -84,5 +86,59 @@ func TestLoadConfig_InvalidJSON(t *testing.T) {
 	_, err := LoadConfig(path)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON, got nil")
+	}
+}
+
+func TestIsTailscaleIP(t *testing.T) {
+	tests := []struct {
+		ip   string
+		want bool
+	}{
+		{"100.64.0.0", true},      // start of CGNAT range
+		{"100.64.0.1", true},      // typical Tailscale IP
+		{"100.100.100.100", true}, // Tailscale magic IP
+		{"100.127.255.255", true}, // end of CGNAT range
+		{"100.63.255.255", false}, // just below range
+		{"100.128.0.0", false},    // just above range
+		{"10.0.0.1", false},       // private but not CGNAT
+		{"192.168.1.1", false},    // local network
+		{"8.8.8.8", false},        // public IP
+	}
+	for _, tt := range tests {
+		t.Run(tt.ip, func(t *testing.T) {
+			got := isTailscaleIP(net.ParseIP(tt.ip))
+			if got != tt.want {
+				t.Errorf("isTailscaleIP(%s) = %v, want %v", tt.ip, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveBind_ExplicitValue(t *testing.T) {
+	got := ResolveBind("192.168.1.100")
+	if got != "192.168.1.100" {
+		t.Errorf("ResolveBind with explicit value = %q, want %q", got, "192.168.1.100")
+	}
+}
+
+func TestResolveBind_AutoDetect(t *testing.T) {
+	got := ResolveBind("")
+	if got == "" {
+		t.Fatal("ResolveBind('') returned empty string, want an IP address")
+	}
+	// Should return either a Tailscale IP or 127.0.0.1 fallback
+	ip := net.ParseIP(got)
+	if ip == nil {
+		t.Fatalf("ResolveBind('') returned invalid IP: %q", got)
+	}
+}
+
+func TestConfigPath(t *testing.T) {
+	got := ConfigPath()
+	if got == "" {
+		t.Fatal("ConfigPath() returned empty string")
+	}
+	if !strings.Contains(got, "cliplink") {
+		t.Errorf("ConfigPath() = %q, want to contain 'cliplink'", got)
 	}
 }
