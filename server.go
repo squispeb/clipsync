@@ -116,10 +116,6 @@ func (s *Server) handleClipboard(w http.ResponseWriter, r *http.Request) {
 		s.onReceive(data, contentType)
 	}
 
-	if s.history != nil {
-		s.history.Add(hashContent(data), contentType, data, "remote", "")
-	}
-
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "ok")
 }
