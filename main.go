@@ -171,14 +171,26 @@ func cmdDaemon(args []string) error {
 func cmdSend(args []string) error {
 	fs := flag.NewFlagSet("send", flag.ExitOnError)
 	configPath := fs.String("config", "", "config file path")
+	noDiscover := fs.Bool("no-discover", false, "disable auto-discovery")
 	fs.Parse(args)
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
+
+	// Auto-discovery fallback for CLI commands
+	if len(cfg.Peers) == 0 && cfg.AutoDiscover && !*noDiscover {
+		discovered, err := DiscoverPeers(cfg.Port, cfg.Token, 3*time.Second)
+		if err != nil {
+			log.Printf("auto-discovery failed: %v", err)
+		} else {
+			cfg.Peers = discovered
+		}
+	}
+
 	if len(cfg.Peers) == 0 {
-		return fmt.Errorf("no peers configured")
+		return fmt.Errorf("no peers configured (run daemon first, or use --no-discover with explicit peers)")
 	}
 
 	board, err := NewSystemBoard()
@@ -199,14 +211,26 @@ func cmdSend(args []string) error {
 func cmdStatus(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	configPath := fs.String("config", "", "config file path")
+	noDiscover := fs.Bool("no-discover", false, "disable auto-discovery")
 	fs.Parse(args)
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
+
+	// Auto-discovery fallback for CLI commands
+	if len(cfg.Peers) == 0 && cfg.AutoDiscover && !*noDiscover {
+		discovered, err := DiscoverPeers(cfg.Port, cfg.Token, 3*time.Second)
+		if err != nil {
+			log.Printf("auto-discovery failed: %v", err)
+		} else {
+			cfg.Peers = discovered
+		}
+	}
+
 	if len(cfg.Peers) == 0 {
-		return fmt.Errorf("no peers configured")
+		return fmt.Errorf("no peers configured (run daemon first, or use --no-discover with explicit peers)")
 	}
 
 	httpClient := &http.Client{
@@ -251,11 +275,22 @@ func cmdStatus(args []string) error {
 func cmdPeers(args []string) error {
 	fs := flag.NewFlagSet("peers", flag.ExitOnError)
 	configPath := fs.String("config", "", "config file path")
+	noDiscover := fs.Bool("no-discover", false, "disable auto-discovery")
 	fs.Parse(args)
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
+	}
+
+	// Auto-discovery fallback for CLI commands
+	if len(cfg.Peers) == 0 && cfg.AutoDiscover && !*noDiscover {
+		discovered, err := DiscoverPeers(cfg.Port, cfg.Token, 3*time.Second)
+		if err != nil {
+			log.Printf("auto-discovery failed: %v", err)
+		} else {
+			cfg.Peers = discovered
+		}
 	}
 
 	if len(cfg.Peers) == 0 {
