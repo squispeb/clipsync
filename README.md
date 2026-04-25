@@ -38,9 +38,9 @@ Each machine runs a daemon that:
 
 ## Installation
 
-### Pre-built binaries
+### Pre-built binaries (Linux & Windows only)
 
-Grab the latest release for your platform, or build from source:
+Grab the latest release for Linux or Windows:
 
 ```bash
 # Linux (amd64)
@@ -48,14 +48,11 @@ curl -LO https://github.com/YOURUSER/clipsync/releases/latest/download/clipsync-
 chmod +x clipsync-linux-amd64
 sudo mv clipsync-linux-amd64 /usr/local/bin/clipsync
 
-# macOS (Apple Silicon)
-curl -LO https://github.com/YOURUSER/clipsync/releases/latest/download/clipsync-mac-arm64
-chmod +x clipsync-mac-arm64
-sudo mv clipsync-mac-arm64 /usr/local/bin/clipsync
-
 # Windows (PowerShell)
-# Download clipsync-windows-amd64.exe and place it in your PATH
+# Download clipsync-windows-amd64.exe from the releases page
 ```
+
+> **macOS users:** The clipboard library (`golang.design/x/clipboard`) requires CGO on macOS, so cross-compiled release binaries won't work. You must build from source on a Mac (see below).
 
 ### Build from source
 
@@ -70,11 +67,25 @@ sudo apt install libx11-dev libxext-dev libxmu-dev libgl1-mesa-dev
 sudo dnf install libX11-devel libXext-devel libXmu-devel mesa-libGL-devel
 ```
 
+**macOS prerequisites:**
+```bash
+# Install Xcode Command Line Tools
+xcode-select --install
+
+# Install Go (via Homebrew or from https://go.dev/dl/)
+brew install go
+```
+
 **Build:**
 ```bash
 git clone https://github.com/YOURUSER/clipsync.git
 cd clipsync
-make build
+
+# Linux / Windows
+make build-linux build-windows
+
+# macOS (must be built natively on a Mac)
+make build-mac-native
 # Binaries in dist/
 ```
 
@@ -84,9 +95,13 @@ make build
 
 Make sure Tailscale is installed, running, and all devices are on the same tailnet.
 
-### 2. Download clipsync on each device
+### 2. Install clipsync on each device
 
-See Installation above.
+- **Linux / Windows:** Download pre-built binaries from the [releases page](https://github.com/YOURUSER/clipsync/releases).
+- **macOS:** Build from source (see Build from source above). After building, you may need to remove the quarantine attribute:
+  ```bash
+  sudo xattr -d com.apple.quarantine /usr/local/bin/clipsync
+  ```
 
 ### 3. Just run the daemon
 
