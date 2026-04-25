@@ -104,3 +104,15 @@ func ConfigPath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "clipsync", "config.json")
 }
+
+// SaveConfig writes the config to disk as formatted JSON.
+func SaveConfig(path string, cfg Config) error {
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
+}

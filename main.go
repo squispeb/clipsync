@@ -118,7 +118,21 @@ func cmdDaemon(args []string) error {
 			if len(discovered) > 0 {
 				log.Printf("auto-discovered %d peer(s): %v", len(discovered), discovered)
 			}
-			cfg.Peers = MergePeerLists(cfg.Peers, discovered)
+			newPeers := MergePeerLists(cfg.Peers, discovered)
+			if len(newPeers) != len(cfg.Peers) {
+				cfg.Peers = newPeers
+				configPath := *configPath
+				if configPath == "" {
+					configPath = ConfigPath()
+				}
+				if err := SaveConfig(configPath, cfg); err != nil {
+					log.Printf("warning: failed to save config: %v", err)
+				} else {
+					log.Printf("saved %d peer(s) to config", len(cfg.Peers))
+				}
+			} else {
+				cfg.Peers = newPeers
+			}
 		}
 	}
 
@@ -143,6 +157,10 @@ func cmdDaemon(args []string) error {
 
 	// Periodic re-discovery
 	if cfg.AutoDiscover && !*noDiscover {
+		configFilePath := *configPath
+		if configFilePath == "" {
+			configFilePath = ConfigPath()
+		}
 		go func() {
 			ticker := time.NewTicker(60 * time.Second)
 			defer ticker.Stop()
@@ -156,6 +174,14 @@ func cmdDaemon(args []string) error {
 						continue
 					}
 					newPeers := MergePeerLists(cfg.Peers, discovered)
+					if len(newPeers) != len(cfg.Peers) {
+						cfg.Peers = newPeers
+						if err := SaveConfig(configFilePath, cfg); err != nil {
+							log.Printf("warning: failed to save config: %v", err)
+						} else {
+							log.Printf("saved %d peer(s) to config", len(cfg.Peers))
+						}
+					}
 					engine.SetPeers(newPeers)
 				}
 			}
