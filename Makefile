@@ -3,6 +3,13 @@
 VERSION := 0.3.0
 BINARY  := clipsync
 
+# macOS SDK path for CGO (required on modern macOS where headers moved into the SDK)
+ifeq ($(shell uname -s),Darwin)
+	SDK_PATH := $(shell xcrun --show-sdk-path 2>/dev/null)
+	export CGO_CFLAGS := -isysroot $(SDK_PATH)
+	export CGO_LDFLAGS := -isysroot $(SDK_PATH)
+endif
+
 # NOTE: macOS binaries MUST be built natively on macOS because
 # golang.design/x/clipboard requires CGO on Darwin.
 # Cross-compiling from Linux produces a broken binary.
