@@ -85,7 +85,7 @@ cd clipsync
 # Linux / Windows
 make build-linux build-windows
 
-# macOS (must be built natively on a Mac)
+# macOS (must be built natively on a Mac; Makefile auto-detects the Xcode SDK)
 make build-mac-native
 # Binaries in dist/
 ```
