@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -10,11 +11,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
 
-const version = "0.3.0"
+const version = "0.4.0"
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -36,6 +38,8 @@ func main() {
 		err = cmdPeers(os.Args[2:])
 	case "discover":
 		err = cmdDiscover(os.Args[2:])
+	case "history":
+		err = cmdHistory(os.Args[2:])
 	case "version":
 		fmt.Printf("clipsync %s\n", version)
 	case "help", "-h", "--help":
@@ -62,6 +66,7 @@ func printUsage() {
 	fmt.Println("  status     Check if peer daemons are reachable")
 	fmt.Println("  peers      List configured peers")
 	fmt.Println("  discover   Scan tailnet for clipsync peers")
+	fmt.Println("  history    Show clipboard history")
 	fmt.Println("  version    Print version")
 	fmt.Println()
 	fmt.Println("Config file: " + ConfigPath())
@@ -117,8 +122,9 @@ func cmdDaemon(args []string) error {
 		}
 	}
 
-	engine := NewSyncEngine(board, cfg)
-	srv := NewServer(board, cfg.Bind, cfg.Port, cfg.MaxSize, cfg.Token, engine.OnRemoteContent)
+	history := NewHistory(cfg.HistoryItems, cfg.HistoryMemory*1024*1024)
+	engine := NewSyncEngine(board, cfg, history)
+	srv := NewServer(board, cfg.Bind, cfg.Port, cfg.MaxSize, cfg.Token, history, cfg.DeviceName, engine.OnRemoteContent)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -180,7 +186,8 @@ func cmdSend(args []string) error {
 		return fmt.Errorf("clipboard init: %w", err)
 	}
 
-	engine := NewSyncEngine(board, cfg)
+	history := NewHistory(cfg.HistoryItems, cfg.HistoryMemory*1024*1024)
+	engine := NewSyncEngine(board, cfg, history)
 	if err := engine.SendNow(); err != nil {
 		return err
 	}
@@ -305,6 +312,85 @@ func cmdDiscover(args []string) error {
 	fmt.Printf("Found %d peer(s):\n", len(peers))
 	for _, p := range peers {
 		fmt.Printf("  - %s\n", p)
+	}
+	return nil
+}
+
+func cmdHistory(args []string) error {
+	fs := flag.NewFlagSet("history", flag.ExitOnError)
+	limit := fs.Int("limit", 20, "max items to show")
+	configPath := fs.String("config", "", "config file path")
+	fs.Parse(args)
+
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+
+	// Try to connect to local daemon's history API
+	bind := ResolveBind(cfg.Bind)
+	if bind == "127.0.0.1" && cfg.Bind != "" {
+		bind = cfg.Bind
+	}
+	url := fmt.Sprintf("http://%s:%d/history?limit=%d", bind, cfg.Port, *limit)
+
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	if cfg.Token != "" {
+		req.Header.Set("X-ClipSync-Token", cfg.Token)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("cannot connect to local daemon (is it running?): %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("daemon error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Items []HistoryItem `json:"items"`
+		Count int           `json:"count"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("parse response: %w", err)
+	}
+
+	if len(result.Items) == 0 {
+		fmt.Println("No clipboard history available.")
+		return nil
+	}
+
+	fmt.Printf("Clipboard history (%d items):\n\n", result.Count)
+	for i, item := range result.Items {
+		timeStr := item.Timestamp.Format("15:04:05")
+		source := item.Source
+		if source == "" {
+			source = "unknown"
+		}
+		if item.Device != "" {
+			source = fmt.Sprintf("%s (%s)", source, item.Device)
+		}
+
+		preview := ""
+		if item.ContentType == "text/plain; charset=utf-8" {
+			preview = "[text]"
+		} else if strings.HasPrefix(item.ContentType, "image/") {
+			preview = "[image]"
+		} else {
+			preview = fmt.Sprintf("[%s]", item.ContentType)
+		}
+
+		fmt.Printf("  %d. %s  %s  %s  %d bytes  %s\n",
+			i+1,
+			timeStr,
+			item.Hash[:8],
+			preview,
+			item.Size,
+			source,
+		)
 	}
 	return nil
 }

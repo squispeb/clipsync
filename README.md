@@ -10,6 +10,7 @@ Forked from [weishh/cliplink](https://github.com/weishh/cliplink) with multi-pee
 
 - **Zero-config setup** — run `clipsync daemon` and it auto-discovers peers on your tailnet
 - **Automatic background sync** — daemon polls clipboard changes and broadcasts to all peers
+- **Clipboard history** — browse recent clipboard items with `clipsync history`
 - **Multi-peer** — sync across 2+ machines simultaneously
 - **Deduplication** — SHA-256 content hashing prevents echo loops
 - **Text + images** — screenshots and copied images transfer natively
@@ -138,7 +139,9 @@ If you prefer to explicitly define peers or customize behavior, create a config 
   "max_size": 10485760,
   "sync_interval_ms": 500,
   "token": "",
-  "auto_discover": true
+  "auto_discover": true,
+  "history_max_items": 100,
+  "history_max_memory_mb": 50
 }
 ```
 
@@ -152,6 +155,8 @@ If you prefer to explicitly define peers or customize behavior, create a config 
 | `sync_interval_ms` | `500` | How often to poll clipboard for changes |
 | `token` | `""` | Optional shared secret. All peers must use the same token |
 | `auto_discover` | `true` | Automatically discover peers via `tailscale status` |
+| `history_max_items` | `100` | Max clipboard history entries to keep in memory |
+| `history_max_memory_mb` | `50` | Max total memory for history storage (MB) |
 
 **Tailscale IP auto-detection:** When `bind` is empty, the daemon scans interfaces for an IP in the Tailscale CGNAT range (`100.64.0.0/10`). The daemon is only reachable within your tailnet.
 
@@ -172,6 +177,8 @@ Commands:
   status      Check if peer daemons are reachable
   peers       List configured peers
   discover    Scan tailnet for clipsync peers
+  history     Show clipboard history
+    --limit <n>       Number of items to show (default 20)
   version     Print version
 ```
 
@@ -199,6 +206,36 @@ sudo launchctl start com.clipsync.daemon
 ### Windows
 
 Use Task Scheduler to run `clipsync.exe daemon` at startup, or run it in a terminal session.
+
+## Clipboard History
+
+ClipSync keeps an in-memory history of recent clipboard items. Both local copies and remote receives are tracked.
+
+```bash
+# Show recent clipboard history
+clipsync history
+
+# Show more items
+clipsync history --limit 50
+```
+
+Example output:
+```
+Clipboard history (5 items):
+
+  1. 14:32:10  a1b2c3d4  [text]  24 bytes  local (office-laptop)
+  2. 14:31:45  e5f6g7h8  [image]  15432 bytes  remote (home-desktop)
+  3. 14:30:22  i9j0k1l2  [text]  128 bytes  local (office-laptop)
+```
+
+The history is stored **only in memory** — nothing is written to disk. You can control the limits via config:
+
+| Setting | Default | Description |
+|---|---|---|
+| `history_max_items` | 100 | Max number of history entries |
+| `history_max_memory_mb` | 50 | Max memory for all stored content (MB) |
+
+When either limit is reached, the oldest entries are evicted automatically.
 
 ## How Auto-Discovery Works
 

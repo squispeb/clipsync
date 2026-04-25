@@ -9,7 +9,7 @@ import (
 )
 
 func newTestServer(board Board) *Server {
-	return NewServer(board, "127.0.0.1", 8275, 1024, "", nil)
+	return NewServer(board, "127.0.0.1", 8275, 1024, "", nil, "", nil)
 }
 
 func TestHandleClipboard_Text(t *testing.T) {
@@ -128,7 +128,7 @@ func TestHandleClipboard_WriteError(t *testing.T) {
 
 func TestHandleClipboard_TokenAuth(t *testing.T) {
 	board := &MockBoard{}
-	srv := NewServer(board, "127.0.0.1", 8275, 1024, "secret", nil)
+	srv := NewServer(board, "127.0.0.1", 8275, 1024, "secret", nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/clip", strings.NewReader("hello"))
 	req.Header.Set("Content-Type", "text/plain")
@@ -151,7 +151,7 @@ func TestHandleClipboard_TokenAuth(t *testing.T) {
 func TestHandleClipboard_OnReceive(t *testing.T) {
 	board := &MockBoard{}
 	var received bool
-	srv := NewServer(board, "127.0.0.1", 8275, 1024, "", func(data []byte, ct string) {
+	srv := NewServer(board, "127.0.0.1", 8275, 1024, "", nil, "", func(data []byte, ct string) {
 		received = true
 	})
 

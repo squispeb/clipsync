@@ -1,6 +1,6 @@
 .PHONY: build build-mac build-mac-native build-linux build-windows test clean
 
-VERSION := 0.3.0
+VERSION := 0.4.0
 BINARY  := clipsync
 
 # NOTE: macOS binaries MUST be built natively on macOS because

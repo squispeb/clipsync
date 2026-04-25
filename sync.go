@@ -21,6 +21,7 @@ type SyncEngine struct {
 	device   string
 	client   *http.Client
 	interval time.Duration
+	history  *History
 
 	mu             sync.RWMutex
 	peers          []string
@@ -28,7 +29,7 @@ type SyncEngine struct {
 	lastRemoteHash string
 }
 
-func NewSyncEngine(board Board, cfg Config) *SyncEngine {
+func NewSyncEngine(board Board, cfg Config, history *History) *SyncEngine {
 	interval := time.Duration(cfg.SyncInterval) * time.Millisecond
 	if interval <= 0 {
 		interval = 500 * time.Millisecond
@@ -40,6 +41,7 @@ func NewSyncEngine(board Board, cfg Config) *SyncEngine {
 		token:    cfg.Token,
 		device:   cfg.DeviceName,
 		interval: interval,
+		history:  history,
 		client: &http.Client{
 			Timeout: 15 * time.Second,
 			Transport: &http.Transport{
@@ -100,6 +102,9 @@ func (e *SyncEngine) syncOnce() {
 	e.mu.Unlock()
 
 	if isNewLocal {
+		if e.history != nil {
+			e.history.Add(h, contentType, data, "local", e.device)
+		}
 		if e.device != "" {
 			log.Printf("[%s] clipboard changed (%s, %d bytes), broadcasting to %d peers", e.device, contentType, len(data), len(peers))
 		} else {
@@ -153,6 +158,10 @@ func (e *SyncEngine) OnRemoteContent(data []byte, contentType string) {
 	e.lastRemoteHash = h
 	e.lastLocalHash = h
 	e.mu.Unlock()
+
+	if e.history != nil {
+		e.history.Add(h, contentType, data, "remote", "")
+	}
 
 	if e.device != "" {
 		log.Printf("[%s] received remote clipboard (%s, %d bytes)", e.device, contentType, len(data))

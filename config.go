@@ -10,23 +10,27 @@ import (
 )
 
 type Config struct {
-	Peers        []string `json:"peers"`
-	Bind         string   `json:"bind"`
-	Port         int      `json:"port"`
-	MaxSize      int64    `json:"max_size"`
-	SyncInterval int      `json:"sync_interval_ms"`
-	Token        string   `json:"token"`
-	DeviceName   string   `json:"device_name"`
-	AutoDiscover bool     `json:"auto_discover"`
+	Peers          []string `json:"peers"`
+	Bind           string   `json:"bind"`
+	Port           int      `json:"port"`
+	MaxSize        int64    `json:"max_size"`
+	SyncInterval   int      `json:"sync_interval_ms"`
+	Token          string   `json:"token"`
+	DeviceName     string   `json:"device_name"`
+	AutoDiscover   bool     `json:"auto_discover"`
+	HistoryItems   int      `json:"history_max_items"`
+	HistoryMemory  int64    `json:"history_max_memory_mb"`
 }
 
 func DefaultConfig() Config {
 	return Config{
-		Peers:        []string{},
-		Port:         8275,
-		MaxSize:      10 * 1024 * 1024,
-		SyncInterval: 500,
-		AutoDiscover: true,
+		Peers:         []string{},
+		Port:          8275,
+		MaxSize:       10 * 1024 * 1024,
+		SyncInterval:  500,
+		AutoDiscover:  true,
+		HistoryItems:  100,
+		HistoryMemory: 50,
 	}
 }
 
