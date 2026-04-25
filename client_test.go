@@ -20,7 +20,7 @@ func TestSend_Text(t *testing.T) {
 	defer mock.Close()
 
 	board := &MockBoard{text: []byte("hello clipboard")}
-	client := NewClient(mock.Listener.Addr().String(), board, 10*1024*1024)
+	client := NewClient(mock.Listener.Addr().String(), board, 10*1024*1024, "")
 
 	err := client.Send()
 	if err != nil {
@@ -45,8 +45,8 @@ func TestSend_Image(t *testing.T) {
 	defer mock.Close()
 
 	pngData := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A}
-	board := &MockBoard{image: pngData} // no text, only image
-	client := NewClient(mock.Listener.Addr().String(), board, 10*1024*1024)
+	board := &MockBoard{image: pngData}
+	client := NewClient(mock.Listener.Addr().String(), board, 10*1024*1024, "")
 
 	err := client.Send()
 	if err != nil {
@@ -68,12 +68,11 @@ func TestSend_TextPriorityOverImage(t *testing.T) {
 	}))
 	defer mock.Close()
 
-	// Board has both text and image — text should win
 	board := &MockBoard{
 		text:  []byte("some text"),
 		image: []byte{0x89, 0x50, 0x4E, 0x47},
 	}
-	client := NewClient(mock.Listener.Addr().String(), board, 10*1024*1024)
+	client := NewClient(mock.Listener.Addr().String(), board, 10*1024*1024, "")
 
 	err := client.Send()
 	if err != nil {
@@ -85,8 +84,8 @@ func TestSend_TextPriorityOverImage(t *testing.T) {
 }
 
 func TestSend_EmptyClipboard(t *testing.T) {
-	board := &MockBoard{} // no text, no image
-	client := NewClient("127.0.0.1:9999", board, 10*1024*1024)
+	board := &MockBoard{}
+	client := NewClient("127.0.0.1:9999", board, 10*1024*1024, "")
 
 	err := client.Send()
 	if err == nil {
@@ -101,7 +100,7 @@ func TestSend_PeerRejects(t *testing.T) {
 	defer mock.Close()
 
 	board := &MockBoard{text: []byte("data")}
-	client := NewClient(mock.Listener.Addr().String(), board, 10*1024*1024)
+	client := NewClient(mock.Listener.Addr().String(), board, 10*1024*1024, "")
 
 	err := client.Send()
 	if err == nil {
@@ -111,8 +110,7 @@ func TestSend_PeerRejects(t *testing.T) {
 
 func TestSend_PeerUnreachable(t *testing.T) {
 	board := &MockBoard{text: []byte("data")}
-	// Use a port that nothing is listening on
-	client := NewClient("127.0.0.1:1", board, 10*1024*1024)
+	client := NewClient("127.0.0.1:1", board, 10*1024*1024, "")
 
 	err := client.Send()
 	if err == nil {
@@ -122,8 +120,7 @@ func TestSend_PeerUnreachable(t *testing.T) {
 
 func TestSend_TooLarge(t *testing.T) {
 	board := &MockBoard{text: []byte("x")}
-	// maxSize = 0, so even 1 byte is too large
-	client := NewClient("127.0.0.1:9999", board, 0)
+	client := NewClient("127.0.0.1:9999", board, 0, "")
 
 	err := client.Send()
 	if err == nil {
@@ -136,7 +133,7 @@ func TestSend_TooLarge(t *testing.T) {
 
 func TestSend_ClipboardReadError(t *testing.T) {
 	board := &MockBoard{readErr: fmt.Errorf("permission denied")}
-	client := NewClient("127.0.0.1:9999", board, 10*1024*1024)
+	client := NewClient("127.0.0.1:9999", board, 10*1024*1024, "")
 
 	err := client.Send()
 	if err == nil {
@@ -144,5 +141,25 @@ func TestSend_ClipboardReadError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "permission denied") {
 		t.Errorf("error = %q, want to contain 'permission denied'", err)
+	}
+}
+
+func TestSend_WithToken(t *testing.T) {
+	var gotToken string
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotToken = r.Header.Get("X-ClipSync-Token")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mock.Close()
+
+	board := &MockBoard{text: []byte("secret text")}
+	client := NewClient(mock.Listener.Addr().String(), board, 10*1024*1024, "mytoken")
+
+	err := client.Send()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotToken != "mytoken" {
+		t.Errorf("token = %q, want %q", gotToken, "mytoken")
 	}
 }

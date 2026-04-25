@@ -9,7 +9,7 @@ import (
 )
 
 func newTestServer(board Board) *Server {
-	return NewServer(board, "127.0.0.1", 8275, 1024) // 1KB max for tests
+	return NewServer(board, "127.0.0.1", 8275, 1024, "", nil)
 }
 
 func TestHandleClipboard_Text(t *testing.T) {
@@ -35,7 +35,7 @@ func TestHandleClipboard_Image(t *testing.T) {
 	board := &MockBoard{}
 	srv := newTestServer(board)
 
-	fakeImage := []byte{0x89, 0x50, 0x4E, 0x47} // PNG header bytes
+	fakeImage := []byte{0x89, 0x50, 0x4E, 0x47}
 	req := httptest.NewRequest(http.MethodPost, "/clip", strings.NewReader(string(fakeImage)))
 	req.Header.Set("Content-Type", "image/png")
 	rr := httptest.NewRecorder()
@@ -52,7 +52,7 @@ func TestHandleClipboard_Image(t *testing.T) {
 
 func TestHandleClipboard_TooLarge(t *testing.T) {
 	board := &MockBoard{}
-	srv := newTestServer(board) // maxSize = 1024
+	srv := newTestServer(board)
 
 	big := strings.Repeat("x", 2000)
 	req := httptest.NewRequest(http.MethodPost, "/clip", strings.NewReader(big))
@@ -123,6 +123,48 @@ func TestHandleClipboard_WriteError(t *testing.T) {
 
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rr.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestHandleClipboard_TokenAuth(t *testing.T) {
+	board := &MockBoard{}
+	srv := NewServer(board, "127.0.0.1", 8275, 1024, "secret", nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/clip", strings.NewReader("hello"))
+	req.Header.Set("Content-Type", "text/plain")
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("without token: status = %d, want %d", rr.Code, http.StatusUnauthorized)
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/clip", strings.NewReader("hello"))
+	req2.Header.Set("Content-Type", "text/plain")
+	req2.Header.Set("X-ClipSync-Token", "secret")
+	rr2 := httptest.NewRecorder()
+	srv.ServeHTTP(rr2, req2)
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("with token: status = %d, want %d", rr2.Code, http.StatusOK)
+	}
+}
+
+func TestHandleClipboard_OnReceive(t *testing.T) {
+	board := &MockBoard{}
+	var received bool
+	srv := NewServer(board, "127.0.0.1", 8275, 1024, "", func(data []byte, ct string) {
+		received = true
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/clip", strings.NewReader("hello"))
+	req.Header.Set("Content-Type", "text/plain")
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if !received {
+		t.Error("onReceive callback was not called")
 	}
 }
 

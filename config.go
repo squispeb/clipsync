@@ -10,31 +10,28 @@ import (
 )
 
 type Config struct {
-	Peer    string `json:"peer"`
-	Bind    string `json:"bind"`
-	Port    int    `json:"port"`
-	MaxSize int64  `json:"max_size"`
+	Peers        []string `json:"peers"`
+	Bind         string   `json:"bind"`
+	Port         int      `json:"port"`
+	MaxSize      int64    `json:"max_size"`
+	SyncInterval int      `json:"sync_interval_ms"`
+	Token        string   `json:"token"`
+	DeviceName   string   `json:"device_name"`
 }
 
 func DefaultConfig() Config {
 	return Config{
-		// Bind intentionally empty — daemon auto-detects Tailscale IP.
-		// User can override with explicit IP or "0.0.0.0" for all interfaces.
-		Port:    8275,
-		MaxSize: 10 * 1024 * 1024,
+		Port:         8275,
+		MaxSize:      10 * 1024 * 1024,
+		SyncInterval: 500,
 	}
 }
 
-// isTailscaleIP reports whether ip is in the Tailscale CGNAT range 100.64.0.0/10.
 func isTailscaleIP(ip net.IP) bool {
 	ip4 := ip.To4()
 	return ip4 != nil && ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127
 }
 
-// ResolveBind determines the bind address for the daemon.
-// If bind is already set (from config or --bind flag), use it as-is.
-// Otherwise, auto-detect the Tailscale interface IP (100.64.0.0/10 CGNAT range).
-// Falls back to 127.0.0.1 with a warning if Tailscale is not found.
 func ResolveBind(bind string) string {
 	if bind != "" {
 		return bind
@@ -68,9 +65,6 @@ func ResolveBind(bind string) string {
 	return "127.0.0.1"
 }
 
-// LoadConfig parses the config file and applies defaults.
-// It validates structural fields (port, max_size) but NOT command-specific
-// fields like peer — the caller validates those based on which command runs.
 func LoadConfig(path string) (Config, error) {
 	cfg := DefaultConfig()
 
@@ -89,19 +83,17 @@ func LoadConfig(path string) (Config, error) {
 	if cfg.MaxSize <= 0 {
 		return cfg, fmt.Errorf("config: max_size must be positive, got %d", cfg.MaxSize)
 	}
+	if cfg.SyncInterval <= 0 {
+		cfg.SyncInterval = 500
+	}
 
 	return cfg, nil
 }
 
-// ConfigPath returns the platform-appropriate config file location.
-// Uses os.UserConfigDir which returns:
-//   - macOS: ~/Library/Application Support
-//   - Windows: %AppData%
-//   - Linux: $XDG_CONFIG_HOME or ~/.config
 func ConfigPath() string {
 	if dir, err := os.UserConfigDir(); err == nil {
-		return filepath.Join(dir, "cliplink", "config.json")
+		return filepath.Join(dir, "clipsync", "config.json")
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "cliplink", "config.json")
+	return filepath.Join(home, ".config", "clipsync", "config.json")
 }

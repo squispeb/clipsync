@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -32,8 +32,10 @@ func main() {
 		err = cmdSend(os.Args[2:])
 	case "status":
 		err = cmdStatus(os.Args[2:])
+	case "peers":
+		err = cmdPeers(os.Args[2:])
 	case "version":
-		fmt.Printf("cliplink %s\n", version)
+		fmt.Printf("clipsync %s\n", version)
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -48,21 +50,20 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println("cliplink - cross-platform clipboard sharing over Tailscale")
+	fmt.Println("clipsync - cross-platform clipboard sharing over Tailscale")
 	fmt.Println()
-	fmt.Println("Usage: cliplink <command> [options]")
+	fmt.Println("Usage: clipsync <command> [options]")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  daemon   Start the clipboard receiver daemon")
-	fmt.Println("  send     Send clipboard to peer")
-	fmt.Println("  status   Check if peer daemon is reachable")
+	fmt.Println("  daemon   Start the clipboard receiver and sync daemon")
+	fmt.Println("  send     Manually broadcast clipboard to all peers")
+	fmt.Println("  status   Check if peer daemons are reachable")
+	fmt.Println("  peers    List configured peers")
 	fmt.Println("  version  Print version")
 	fmt.Println()
 	fmt.Println("Config file: " + ConfigPath())
 }
 
-// loadConfig parses the config file without command-specific validation.
-// CLI flag overrides are applied by each command AFTER this call.
 func loadConfig(flagConfig string) (Config, error) {
 	path := flagConfig
 	if path == "" {
@@ -71,33 +72,24 @@ func loadConfig(flagConfig string) (Config, error) {
 	return LoadConfig(path)
 }
 
-// requirePeer validates that peer is set (needed by send/status, not daemon).
-func requirePeer(cfg Config) error {
-	if cfg.Peer == "" {
-		return fmt.Errorf("peer address is required (set in config file or use --peer flag)")
-	}
-	return nil
-}
-
 func cmdDaemon(args []string) error {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	port := fs.Int("port", 0, "listen port (overrides config)")
 	bind := fs.String("bind", "", "bind address (overrides config)")
 	configPath := fs.String("config", "", "config file path")
+	noSync := fs.Bool("no-sync", false, "disable auto-sync (receive-only mode)")
 	fs.Parse(args)
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	// Apply overrides AFTER loading
 	if *port > 0 {
 		cfg.Port = *port
 	}
 	if *bind != "" {
 		cfg.Bind = *bind
 	}
-	// Auto-detect Tailscale IP if bind not specified
 	cfg.Bind = ResolveBind(cfg.Bind)
 
 	board, err := NewSystemBoard()
@@ -105,9 +97,9 @@ func cmdDaemon(args []string) error {
 		return fmt.Errorf("clipboard init: %w", err)
 	}
 
-	srv := NewServer(board, cfg.Bind, cfg.Port, cfg.MaxSize)
+	engine := NewSyncEngine(board, cfg)
+	srv := NewServer(board, cfg.Bind, cfg.Port, cfg.MaxSize, cfg.Token, engine.OnRemoteContent)
 
-	// Graceful shutdown: signal → shutdown HTTP server → exit
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -119,6 +111,10 @@ func cmdDaemon(args []string) error {
 		srv.Shutdown(shutdownCtx)
 	}()
 
+	if !*noSync {
+		go engine.Start(ctx)
+	}
+
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("server: %w", err)
 	}
@@ -127,7 +123,6 @@ func cmdDaemon(args []string) error {
 
 func cmdSend(args []string) error {
 	fs := flag.NewFlagSet("send", flag.ExitOnError)
-	peer := fs.String("peer", "", "peer address (overrides config)")
 	configPath := fs.String("config", "", "config file path")
 	fs.Parse(args)
 
@@ -135,12 +130,8 @@ func cmdSend(args []string) error {
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	// Apply override BEFORE validation
-	if *peer != "" {
-		cfg.Peer = *peer
-	}
-	if err := requirePeer(cfg); err != nil {
-		return err
+	if len(cfg.Peers) == 0 {
+		return fmt.Errorf("no peers configured")
 	}
 
 	board, err := NewSystemBoard()
@@ -148,18 +139,17 @@ func cmdSend(args []string) error {
 		return fmt.Errorf("clipboard init: %w", err)
 	}
 
-	client := NewClient(cfg.Peer, board, cfg.MaxSize)
-	if err := client.Send(); err != nil {
+	engine := NewSyncEngine(board, cfg)
+	if err := engine.SendNow(); err != nil {
 		return err
 	}
 
-	fmt.Println("sent")
+	fmt.Printf("broadcasted to %d peer(s)\n", len(cfg.Peers))
 	return nil
 }
 
 func cmdStatus(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
-	peer := fs.String("peer", "", "peer address (overrides config)")
 	configPath := fs.String("config", "", "config file path")
 	fs.Parse(args)
 
@@ -167,14 +157,10 @@ func cmdStatus(args []string) error {
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	if *peer != "" {
-		cfg.Peer = *peer
-	}
-	if err := requirePeer(cfg); err != nil {
-		return err
+	if len(cfg.Peers) == 0 {
+		return fmt.Errorf("no peers configured")
 	}
 
-	url := fmt.Sprintf("http://%s/health", cfg.Peer)
 	httpClient := &http.Client{
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
@@ -184,16 +170,56 @@ func cmdStatus(args []string) error {
 			}).DialContext,
 		},
 	}
-	resp, err := httpClient.Get(url)
-	if err != nil {
-		return fmt.Errorf("peer unreachable: %w", err)
-	}
-	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("peer error (%d): %s", resp.StatusCode, string(body))
+	allOK := true
+	for _, peer := range cfg.Peers {
+		url := fmt.Sprintf("http://%s/health", peer)
+		req, _ := http.NewRequest(http.MethodGet, url, nil)
+		if cfg.Token != "" {
+			req.Header.Set("X-ClipSync-Token", cfg.Token)
+		}
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			fmt.Printf("  %s  unreachable (%v)\n", peer, err)
+			allOK = false
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			fmt.Printf("  %s  ok (%s)\n", peer, string(body))
+		} else {
+			fmt.Printf("  %s  error %d\n", peer, resp.StatusCode)
+			allOK = false
+		}
 	}
-	fmt.Printf("peer ok: %s\n", string(body))
+
+	if !allOK {
+		return fmt.Errorf("some peers are unreachable")
+	}
+	return nil
+}
+
+func cmdPeers(args []string) error {
+	fs := flag.NewFlagSet("peers", flag.ExitOnError)
+	configPath := fs.String("config", "", "config file path")
+	fs.Parse(args)
+
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+
+	if len(cfg.Peers) == 0 {
+		fmt.Println("No peers configured.")
+		return nil
+	}
+
+	fmt.Printf("Configured peers (%d):\n", len(cfg.Peers))
+	for _, p := range cfg.Peers {
+		fmt.Printf("  - %s\n", p)
+	}
+	fmt.Printf("\nListen address: %s:%d\n", cfg.Bind, cfg.Port)
+	fmt.Printf("Sync interval: %d ms\n", cfg.SyncInterval)
 	return nil
 }

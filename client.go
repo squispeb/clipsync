@@ -13,20 +13,22 @@ type Client struct {
 	peer    string
 	board   Board
 	maxSize int64
+	token   string
 	http    *http.Client
 }
 
-func NewClient(peer string, board Board, maxSize int64) *Client {
+func NewClient(peer string, board Board, maxSize int64, token string) *Client {
 	return &Client{
 		peer:    peer,
 		board:   board,
 		maxSize: maxSize,
+		token:   token,
 		http: &http.Client{
-			Timeout: 15 * time.Second, // total timeout (allows large image transfer)
+			Timeout: 15 * time.Second,
 			Transport: &http.Transport{
-				Proxy: nil, // bypass system proxy — always LAN
+				Proxy: nil,
 				DialContext: (&net.Dialer{
-					Timeout: 2 * time.Second, // connect timeout — LAN should respond in <10ms
+					Timeout: 2 * time.Second,
 				}).DialContext,
 			},
 		},
@@ -34,21 +36,26 @@ func NewClient(peer string, board Board, maxSize int64) *Client {
 }
 
 func (c *Client) Send() error {
-	data, contentType, err := c.readClipboard()
+	data, contentType, err := readClipboard(c.board)
 	if err != nil {
 		return err
 	}
-
 	if int64(len(data)) > c.maxSize {
 		return fmt.Errorf("clipboard data too large (%d bytes, max %d)", len(data), c.maxSize)
 	}
+	return c.sendData(data, contentType)
+}
 
+func (c *Client) sendData(data []byte, contentType string) error {
 	url := fmt.Sprintf("http://%s/clip", c.peer)
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", contentType)
+	if c.token != "" {
+		req.Header.Set("X-ClipSync-Token", c.token)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -60,25 +67,22 @@ func (c *Client) Send() error {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("peer rejected (%d): %s", resp.StatusCode, string(body))
 	}
-
 	return nil
 }
 
 // readClipboard reads the system clipboard content.
 // Priority: text first, then image.
-// Distinguishes "empty clipboard" from actual read errors.
-func (c *Client) readClipboard() (data []byte, contentType string, err error) {
-	text, textErr := c.board.ReadText()
+func readClipboard(board Board) (data []byte, contentType string, err error) {
+	text, textErr := board.ReadText()
 	if textErr == nil && len(text) > 0 {
 		return text, "text/plain; charset=utf-8", nil
 	}
 
-	img, imgErr := c.board.ReadImage()
+	img, imgErr := board.ReadImage()
 	if imgErr == nil && len(img) > 0 {
 		return img, "image/png", nil
 	}
 
-	// Both failed — if both returned real errors, propagate them
 	if textErr != nil && imgErr != nil {
 		return nil, "", fmt.Errorf("clipboard read failed (text: %v; image: %v)", textErr, imgErr)
 	}

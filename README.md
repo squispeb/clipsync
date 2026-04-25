@@ -1,186 +1,202 @@
-# cliplink
+# ClipSync
 
-Cross-platform clipboard sharing over [Tailscale](https://tailscale.com/). Copy on one machine, paste on another — one hotkey away.
+Automatic cross-platform clipboard synchronization over [Tailscale](https://tailscale.com).
 
-```
-Mac (Cmd+C)  →  Cmd+Option+V  →  Windows (Ctrl+V)
-Windows (Ctrl+C)  →  Ctrl+Alt+V  →  Mac (Cmd+V)
-```
+Copy on one machine, paste on another — no hotkeys, no cloud, no accounts. Clipboard data travels directly between your devices through Tailscale's encrypted WireGuard tunnel.
 
-Supports text and images (screenshots). No cloud, no account — clipboard data travels directly between your machines through Tailscale's encrypted WireGuard tunnel.
+Forked from [weishh/cliplink](https://github.com/weishh/cliplink) with multi-peer auto-sync, deduplication, and simple token authentication.
 
-## How It Works
+## Features
 
-```
-Mac                              Windows
-┌──────────┐    HTTP POST    ┌──────────┐
-│ cliplink │ ──────────────→ │ cliplink │
-│  daemon  │ ←────────────── │  daemon  │
-└──────────┘                 └──────────┘
-     ↕                            ↕
-  clipboard                    clipboard
-```
-
-Each machine runs a **daemon** (HTTP server) that listens for incoming clipboard data. When you press the hotkey, `cliplink send` reads your clipboard and POSTs it to the other machine's daemon, which writes it to the system clipboard. That's it.
-
-## Prerequisites
-
-- [Tailscale](https://tailscale.com/) installed and connected on both machines
-- macOS: [Hammerspoon](https://www.hammerspoon.org/) for hotkey (optional)
-- Windows: [AutoHotkey v2](https://www.autohotkey.com/) for hotkey (optional)
-
-## Quick Start
-
-### Download
-
-Grab the latest binaries from [Releases](../../releases) or build from source:
-
-```bash
-git clone https://github.com/weishh/cliplink.git
-cd cliplink
-make build
-# Binaries in dist/
-```
-
-### Setup
-
-**macOS:**
-
-```bash
-chmod +x scripts/setup-mac.sh
-./scripts/setup-mac.sh
-# Then: Hammerspoon menu bar → Reload Config
-```
-
-**Windows (PowerShell):**
-
-```powershell
-powershell -ExecutionPolicy Bypass -File setup-windows.ps1
-```
-
-The setup scripts handle everything: install binary, create config, start daemon, configure auto-start, and set up hotkey.
-
-### Manual Setup
-
-If you prefer to set things up yourself:
-
-**1. Find your Tailscale IPs:**
-
-```bash
-tailscale status
-```
-
-**2. Create config file:**
-
-macOS: `~/Library/Application Support/cliplink/config.json`
-Windows: `%APPDATA%\cliplink\config.json`
-
-```json
-{
-  "peer": "<other-machine-tailscale-ip>:8275",
-  "port": 8275,
-  "max_size": 10485760
-}
-```
-
-**3. Start the daemon on both machines:**
-
-```bash
-cliplink daemon
-```
-
-**4. Test:**
-
-```bash
-# Copy something to clipboard, then:
-cliplink send
-
-# Check if peer is reachable:
-cliplink status
-```
-
-## Usage
-
-```
-cliplink <command> [options]
-
-Commands:
-  daemon   Start the clipboard receiver daemon
-  send     Send clipboard to peer
-  status   Check if peer daemon is reachable
-  version  Print version
-
-Daemon options:
-  --port <port>     Listen port (overrides config)
-  --bind <addr>     Bind address (overrides config)
-  --config <path>   Config file path
-
-Send/Status options:
-  --peer <addr>     Peer address (overrides config)
-  --config <path>   Config file path
-```
-
-## Configuration
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `peer` | (required for send/status) | Other machine's `<tailscale-ip>:<port>` |
-| `port` | `8275` | Local daemon listen port |
-| `bind` | auto-detect | Bind address. Empty = auto-detect Tailscale IP |
-| `max_size` | `10485760` (10MB) | Maximum clipboard payload in bytes |
-
-**Tailscale IP auto-detection:** When `bind` is empty (default), the daemon scans network interfaces for an IP in the Tailscale CGNAT range (`100.64.0.0/10`) and binds to it. This means the daemon is only reachable within your tailnet — not from other networks.
-
-## Hotkeys
-
-| Platform | Hotkey | Action |
-|----------|--------|--------|
-| macOS | `Cmd+Option+V` | Send clipboard to peer |
-| Windows | `Ctrl+Alt+V` | Send clipboard to peer |
-
-Same physical key position on both platforms.
-
-**macOS (Hammerspoon):** The setup script writes to `~/.hammerspoon/init.lua`. A subtle toast notification appears in the top-right corner on success/failure.
-
-**Windows (AutoHotkey v2):** The setup script creates `%LOCALAPPDATA%\cliplink\cliplink-hotkey.ahk` with a tooltip notification.
-
-## Building
-
-Requires Go 1.21+ and Xcode command line tools (for macOS clipboard CGO).
-
-```bash
-make build          # Build for macOS (arm64 + amd64) and Windows (amd64)
-make build-mac      # macOS only
-make build-windows  # Windows only (cross-compiled, no CGO needed)
-make test           # Run all tests
-make clean          # Remove build artifacts
-```
+- **Automatic background sync** — daemon polls clipboard changes and broadcasts to all peers
+- **Multi-peer** — sync across 2+ machines simultaneously
+- **Deduplication** — SHA-256 content hashing prevents echo loops
+- **Text + images** — screenshots and copied images transfer natively
+- **Tailscale-native** — auto-binds to Tailscale interface (`100.64.0.0/10`)
+- **Optional token auth** — shared secret for extra peace of mind within your tailnet
+- **Cross-platform** — Linux, macOS, Windows
+- **Lightweight** — single static binary, ~10MB
 
 ## Architecture
 
 ```
-main.go              CLI entry point, subcommand dispatch, signal handling
-config.go            Config struct, JSON loading, Tailscale IP auto-detection
-board.go             Board interface (clipboard abstraction)
-board_system.go      Real clipboard via golang.design/x/clipboard
-server.go            HTTP daemon: POST /clip (receive) + GET /health
-client.go            HTTP client: read clipboard → POST to peer
+Machine A                          Machine B
+┌─────────────┐    HTTP POST      ┌─────────────┐
+│ clipsync    │ ────────────────→ │ clipsync    │
+│  daemon     │ ←──────────────── │  daemon     │
+└─────────────┘                   └─────────────┘
+      ↕                                 ↕
+   clipboard                         clipboard
 ```
 
-Design decisions:
+Each machine runs a daemon that:
+1. Listens for incoming clipboard data from peers
+2. Polls the local clipboard every `sync_interval_ms`
+3. Broadcasts changes to all configured peers
 
-- **Board interface** decouples clipboard access from network logic, enabling full test coverage with MockBoard (no real clipboard needed in tests)
-- **HTTP over Tailscale** — no custom encryption or auth needed; WireGuard handles both
-- **System proxy bypassed** — `Transport{Proxy: nil}` since all traffic is LAN
-- **2-second connect timeout** — fast failure when peer is offline; 15-second total timeout allows large image transfer
-- **Graceful shutdown** — `signal.NotifyContext` + `http.Server.Shutdown` for clean daemon termination
+## Installation
+
+### Pre-built binaries
+
+Grab the latest release for your platform, or build from source:
+
+```bash
+# Linux (amd64)
+curl -LO https://github.com/YOURUSER/clipsync/releases/latest/download/clipsync-linux-amd64
+chmod +x clipsync-linux-amd64
+sudo mv clipsync-linux-amd64 /usr/local/bin/clipsync
+
+# macOS (Apple Silicon)
+curl -LO https://github.com/YOURUSER/clipsync/releases/latest/download/clipsync-mac-arm64
+chmod +x clipsync-mac-arm64
+sudo mv clipsync-mac-arm64 /usr/local/bin/clipsync
+
+# Windows (PowerShell)
+# Download clipsync-windows-amd64.exe and place it in your PATH
+```
+
+### Build from source
+
+Requires Go 1.23+ and platform-specific clipboard dependencies.
+
+**Linux prerequisites:**
+```bash
+# Ubuntu/Debian
+sudo apt install libx11-dev libxext-dev libxmu-dev libgl1-mesa-dev
+
+# Fedora/RHEL
+sudo dnf install libX11-devel libXext-devel libXmu-devel mesa-libGL-devel
+```
+
+**Build:**
+```bash
+git clone https://github.com/YOURUSER/clipsync.git
+cd clipsync
+make build
+# Binaries in dist/
+```
+
+## Quick Start
+
+### 1. Find your Tailscale IPs
+
+On each machine:
+```bash
+tailscale status
+```
+
+### 2. Create config file
+
+**Linux:** `~/.config/clipsync/config.json`
+**macOS:** `~/Library/Application Support/clipsync/config.json`
+**Windows:** `%AppData%\clipsync\config.json`
+
+```json
+{
+  "device_name": "office-laptop",
+  "peers": [
+    "100.64.0.2:8275",
+    "100.64.0.3:8275"
+  ],
+  "bind": "",
+  "port": 8275,
+  "max_size": 10485760,
+  "sync_interval_ms": 500,
+  "token": ""
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `device_name` | `""` | Friendly name for log output |
+| `peers` | `[]` | List of `<tailscale-ip>:<port>` for all other machines |
+| `bind` | auto-detect | Interface to bind to. Empty = auto-detect Tailscale IP |
+| `port` | `8275` | Listen port |
+| `max_size` | `10485760` | Max clipboard payload in bytes (10 MB) |
+| `sync_interval_ms` | `500` | How often to poll clipboard for changes |
+| `token` | `""` | Optional shared secret. All peers must use the same token |
+
+**Tailscale IP auto-detection:** When `bind` is empty, the daemon scans interfaces for an IP in the Tailscale CGNAT range (`100.64.0.0/10`). The daemon is only reachable within your tailnet.
+
+### 3. Start the daemon on all machines
+
+```bash
+clipsync daemon
+```
+
+Or run in receive-only mode (no broadcasting):
+```bash
+clipsync daemon --no-sync
+```
+
+### 4. Verify connectivity
+
+```bash
+clipsync status
+```
+
+### 5. Test manual broadcast
+
+```bash
+clipsync send
+```
+
+## Running as a Service
+
+### Linux (systemd --user)
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/clipsync.service ~/.config/systemd/user/
+# Edit ExecStart path if needed
+systemctl --user daemon-reload
+systemctl --user enable --now clipsync
+systemctl --user status clipsync
+```
+
+### macOS (launchd)
+
+```bash
+sudo cp launchd/com.clipsync.daemon.plist /Library/LaunchDaemons/
+sudo launchctl load /Library/LaunchDaemons/com.clipsync.daemon.plist
+sudo launchctl start com.clipsync.daemon
+```
+
+### Windows
+
+Use Task Scheduler to run `clipsync.exe daemon` at startup, or run it in a terminal session.
+
+## Commands
+
+```
+clipsync <command> [options]
+
+Commands:
+  daemon      Start the clipboard receiver and sync daemon
+    --port <n>      Override listen port
+    --bind <addr>   Override bind address
+    --config <path> Config file path
+    --no-sync       Receive-only mode
+
+  send        Manually broadcast clipboard to all peers
+  status      Check if peer daemons are reachable
+  peers       List configured peers
+  version     Print version
+```
 
 ## Security
 
 - Clipboard data travels through Tailscale's WireGuard tunnel (encrypted, authenticated)
-- Daemon binds to Tailscale interface only (not `0.0.0.0`) by default
+- Daemon binds to the Tailscale interface by default — not reachable from other networks
+- Optional `token` field adds a shared-secret header (`X-ClipSync-Token`) for extra protection within your tailnet
 - No data stored on disk — clipboard content exists only in memory during transfer
 - No third-party services — direct peer-to-peer within your tailnet
+
+## Limitations
+
+- **WSL2:** Requires a display server (X11/Wayland) for clipboard access. For headless WSL2, run the Windows binary natively instead, or use an X server like VcXsrv.
+- **Polling-based:** We poll the clipboard every `sync_interval_ms`. Very rapid copy-paste cycles may occasionally miss an intermediate state.
+- **No file transfer:** Only text and images (PNG) are supported.
 
 ## License
 

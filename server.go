@@ -11,21 +11,25 @@ import (
 )
 
 type Server struct {
-	board   Board
-	maxSize int64
-	bind    string
-	port    int
-	mux     *http.ServeMux
-	httpSrv *http.Server
+	board      Board
+	maxSize    int64
+	bind       string
+	port       int
+	token      string
+	onReceive  func(data []byte, contentType string)
+	mux        *http.ServeMux
+	httpSrv    *http.Server
 }
 
-func NewServer(board Board, bind string, port int, maxSize int64) *Server {
+func NewServer(board Board, bind string, port int, maxSize int64, token string, onReceive func(data []byte, contentType string)) *Server {
 	s := &Server{
-		board:   board,
-		maxSize: maxSize,
-		bind:    bind,
-		port:    port,
-		mux:     http.NewServeMux(),
+		board:     board,
+		maxSize:   maxSize,
+		bind:      bind,
+		port:      port,
+		token:     token,
+		onReceive: onReceive,
+		mux:       http.NewServeMux(),
 	}
 	s.mux.HandleFunc("/clip", s.handleClipboard)
 	s.mux.HandleFunc("/health", s.handleHealth)
@@ -50,13 +54,18 @@ func (s *Server) handleClipboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check Content-Length header if present
+	if s.token != "" {
+		if r.Header.Get("X-ClipSync-Token") != s.token {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	if r.ContentLength > s.maxSize {
 		http.Error(w, fmt.Sprintf("payload too large (max %d bytes)", s.maxSize), http.StatusRequestEntityTooLarge)
 		return
 	}
 
-	// Read body with size limit (maxSize + 1 to detect overflow)
 	limited := io.LimitReader(r.Body, s.maxSize+1)
 	data, err := io.ReadAll(limited)
 	if err != nil {
@@ -96,6 +105,10 @@ func (s *Server) handleClipboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.onReceive != nil {
+		s.onReceive(data, contentType)
+	}
+
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "ok")
 }
@@ -106,7 +119,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) ListenAndServe() error {
-	log.Printf("cliplink daemon listening on %s:%d", s.bind, s.port)
+	log.Printf("clipsync daemon listening on %s:%d", s.bind, s.port)
 	return s.httpSrv.ListenAndServe()
 }
 

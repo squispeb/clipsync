@@ -1,0 +1,13 @@
+[Unit]
+Description=ClipSync - Tailscale Clipboard Sync Daemon
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/clipsync daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

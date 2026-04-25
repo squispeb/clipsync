@@ -14,42 +14,24 @@ func writeTestConfig(t *testing.T, content string) string {
 	return path
 }
 
-func TestLoadConfig_OverridePeerAfterLoad(t *testing.T) {
-	// Simulate: config file has no peer, CLI flag provides it
+func TestLoadConfig_OverridePeersAfterLoad(t *testing.T) {
 	path := writeTestConfig(t, `{"port":8275}`)
 
 	cfg, err := LoadConfig(path)
 	if err != nil {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
-	if cfg.Peer != "" {
-		t.Fatalf("expected empty peer from config, got %q", cfg.Peer)
+	if len(cfg.Peers) != 0 {
+		t.Fatalf("expected empty peers from config, got %v", cfg.Peers)
 	}
 
-	// Simulate CLI override
-	cfg.Peer = "100.64.0.5:8275"
-	if err := requirePeer(cfg); err != nil {
-		t.Fatalf("requirePeer failed after override: %v", err)
-	}
-}
-
-func TestRequirePeer_Empty(t *testing.T) {
-	cfg := DefaultConfig() // peer is ""
-	if err := requirePeer(cfg); err == nil {
-		t.Fatal("expected error for empty peer, got nil")
+	cfg.Peers = []string{"100.64.0.5:8275"}
+	if len(cfg.Peers) != 1 {
+		t.Fatalf("expected 1 peer after override, got %d", len(cfg.Peers))
 	}
 }
 
-func TestRequirePeer_Set(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Peer = "100.64.0.1:8275"
-	if err := requirePeer(cfg); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestDaemonDoesNotRequirePeer(t *testing.T) {
-	// daemon only needs port — config with no peer should load fine
+func TestDaemonDoesNotRequirePeers(t *testing.T) {
 	path := writeTestConfig(t, `{"port":9000}`)
 
 	cfg, err := LoadConfig(path)
@@ -59,18 +41,16 @@ func TestDaemonDoesNotRequirePeer(t *testing.T) {
 	if cfg.Port != 9000 {
 		t.Errorf("port = %d, want 9000", cfg.Port)
 	}
-	// No requirePeer call — daemon doesn't need it
 }
 
 func TestConfigOverrides_PortAndBind(t *testing.T) {
-	path := writeTestConfig(t, `{"peer":"100.64.0.1:8275","port":8275,"bind":"0.0.0.0"}`)
+	path := writeTestConfig(t, `{"peers":["100.64.0.1:8275"],"port":8275,"bind":"0.0.0.0"}`)
 
 	cfg, err := LoadConfig(path)
 	if err != nil {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
 
-	// Simulate CLI overrides
 	cfg.Port = 9999
 	cfg.Bind = "100.64.0.2"
 

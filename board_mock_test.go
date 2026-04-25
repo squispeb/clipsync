@@ -7,7 +7,7 @@ type MockBoard struct {
 	image    []byte
 	readErr  error
 	writeErr error
-	written  []byte // last data written (text or image)
+	written  []byte
 }
 
 func (m *MockBoard) ReadText() ([]byte, error) {
