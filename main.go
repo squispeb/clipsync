@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -34,6 +34,8 @@ func main() {
 		err = cmdStatus(os.Args[2:])
 	case "peers":
 		err = cmdPeers(os.Args[2:])
+	case "discover":
+		err = cmdDiscover(os.Args[2:])
 	case "version":
 		fmt.Printf("clipsync %s\n", version)
 	case "help", "-h", "--help":
@@ -55,11 +57,12 @@ func printUsage() {
 	fmt.Println("Usage: clipsync <command> [options]")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  daemon   Start the clipboard receiver and sync daemon")
-	fmt.Println("  send     Manually broadcast clipboard to all peers")
-	fmt.Println("  status   Check if peer daemons are reachable")
-	fmt.Println("  peers    List configured peers")
-	fmt.Println("  version  Print version")
+	fmt.Println("  daemon     Start the clipboard receiver and sync daemon")
+	fmt.Println("  send       Manually broadcast clipboard to all peers")
+	fmt.Println("  status     Check if peer daemons are reachable")
+	fmt.Println("  peers      List configured peers")
+	fmt.Println("  discover   Scan tailnet for clipsync peers")
+	fmt.Println("  version    Print version")
 	fmt.Println()
 	fmt.Println("Config file: " + ConfigPath())
 }
@@ -68,6 +71,9 @@ func loadConfig(flagConfig string) (Config, error) {
 	path := flagConfig
 	if path == "" {
 		path = ConfigPath()
+	}
+	if err := EnsureConfig(path); err != nil {
+		return Config{}, err
 	}
 	return LoadConfig(path)
 }
@@ -78,6 +84,7 @@ func cmdDaemon(args []string) error {
 	bind := fs.String("bind", "", "bind address (overrides config)")
 	configPath := fs.String("config", "", "config file path")
 	noSync := fs.Bool("no-sync", false, "disable auto-sync (receive-only mode)")
+	noDiscover := fs.Bool("no-discover", false, "disable auto-discovery")
 	fs.Parse(args)
 
 	cfg, err := loadConfig(*configPath)
@@ -97,6 +104,19 @@ func cmdDaemon(args []string) error {
 		return fmt.Errorf("clipboard init: %w", err)
 	}
 
+	// Auto-discovery
+	if cfg.AutoDiscover && !*noDiscover {
+		discovered, err := DiscoverPeers(cfg.Port, cfg.Token, 3*time.Second)
+		if err != nil {
+			log.Printf("auto-discovery failed: %v", err)
+		} else {
+			if len(discovered) > 0 {
+				log.Printf("auto-discovered %d peer(s): %v", len(discovered), discovered)
+			}
+			cfg.Peers = MergePeerLists(cfg.Peers, discovered)
+		}
+	}
+
 	engine := NewSyncEngine(board, cfg)
 	srv := NewServer(board, cfg.Bind, cfg.Port, cfg.MaxSize, cfg.Token, engine.OnRemoteContent)
 
@@ -113,6 +133,27 @@ func cmdDaemon(args []string) error {
 
 	if !*noSync {
 		go engine.Start(ctx)
+	}
+
+	// Periodic re-discovery
+	if cfg.AutoDiscover && !*noDiscover {
+		go func() {
+			ticker := time.NewTicker(60 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					discovered, err := DiscoverPeers(cfg.Port, cfg.Token, 3*time.Second)
+					if err != nil {
+						continue
+					}
+					newPeers := MergePeerLists(cfg.Peers, discovered)
+					engine.SetPeers(newPeers)
+				}
+			}
+		}()
 	}
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -221,5 +262,49 @@ func cmdPeers(args []string) error {
 	}
 	fmt.Printf("\nListen address: %s:%d\n", cfg.Bind, cfg.Port)
 	fmt.Printf("Sync interval: %d ms\n", cfg.SyncInterval)
+	fmt.Printf("Auto-discover: %v\n", cfg.AutoDiscover)
+	return nil
+}
+
+func cmdDiscover(args []string) error {
+	fs := flag.NewFlagSet("discover", flag.ExitOnError)
+	port := fs.Int("port", 8275, "port to probe")
+	token := fs.String("token", "", "auth token")
+	configPath := fs.String("config", "", "config file path")
+	fs.Parse(args)
+
+	// If config exists, load defaults from it
+	cfg := DefaultConfig()
+	if *configPath != "" {
+		if loaded, err := LoadConfig(*configPath); err == nil {
+			cfg = loaded
+		}
+	} else {
+		if loaded, err := LoadConfig(ConfigPath()); err == nil {
+			cfg = loaded
+		}
+	}
+	if *port > 0 {
+		cfg.Port = *port
+	}
+	if *token != "" {
+		cfg.Token = *token
+	}
+
+	fmt.Println("Scanning tailnet for clipsync peers...")
+	peers, err := DiscoverPeers(cfg.Port, cfg.Token, 3*time.Second)
+	if err != nil {
+		return err
+	}
+	if len(peers) == 0 {
+		fmt.Println("No clipsync peers found on your tailnet.")
+		fmt.Println("Make sure clipsync daemon is running on other devices.")
+		return nil
+	}
+
+	fmt.Printf("Found %d peer(s):\n", len(peers))
+	for _, p := range peers {
+		fmt.Printf("  - %s\n", p)
+	}
 	return nil
 }

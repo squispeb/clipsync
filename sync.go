@@ -16,14 +16,14 @@ import (
 
 type SyncEngine struct {
 	board    Board
-	peers    []string
 	maxSize  int64
 	token    string
 	device   string
 	client   *http.Client
 	interval time.Duration
 
-	mu             sync.Mutex
+	mu             sync.RWMutex
+	peers          []string
 	lastLocalHash  string
 	lastRemoteHash string
 }
@@ -58,10 +58,13 @@ func hashContent(data []byte) string {
 }
 
 func (e *SyncEngine) Start(ctx context.Context) {
-	if len(e.peers) == 0 {
+	e.mu.RLock()
+	peerCount := len(e.peers)
+	e.mu.RUnlock()
+	if peerCount == 0 {
 		log.Println("sync engine: no peers configured, only receiving")
 	}
-	log.Printf("sync engine started (%d peers, interval %v)", len(e.peers), e.interval)
+	log.Printf("sync engine started (%d peers, interval %v)", peerCount, e.interval)
 	ticker := time.NewTicker(e.interval)
 	defer ticker.Stop()
 
@@ -92,21 +95,23 @@ func (e *SyncEngine) syncOnce() {
 	if isNewLocal {
 		e.lastLocalHash = h
 	}
+	peers := make([]string, len(e.peers))
+	copy(peers, e.peers)
 	e.mu.Unlock()
 
 	if isNewLocal {
 		if e.device != "" {
-			log.Printf("[%s] clipboard changed (%s, %d bytes), broadcasting to %d peers", e.device, contentType, len(data), len(e.peers))
+			log.Printf("[%s] clipboard changed (%s, %d bytes), broadcasting to %d peers", e.device, contentType, len(data), len(peers))
 		} else {
-			log.Printf("clipboard changed (%s, %d bytes), broadcasting to %d peers", contentType, len(data), len(e.peers))
+			log.Printf("clipboard changed (%s, %d bytes), broadcasting to %d peers", contentType, len(data), len(peers))
 		}
-		e.sendToPeers(data, contentType)
+		e.sendToPeers(peers, data, contentType)
 	}
 }
 
-func (e *SyncEngine) sendToPeers(data []byte, contentType string) {
+func (e *SyncEngine) sendToPeers(peers []string, data []byte, contentType string) {
 	var wg sync.WaitGroup
-	for _, peer := range e.peers {
+	for _, peer := range peers {
 		wg.Add(1)
 		go func(p string) {
 			defer wg.Done()
@@ -156,6 +161,24 @@ func (e *SyncEngine) OnRemoteContent(data []byte, contentType string) {
 	}
 }
 
+func (e *SyncEngine) SetPeers(peers []string) {
+	e.mu.Lock()
+	changed := len(peers) != len(e.peers)
+	if !changed {
+		for i := range peers {
+			if peers[i] != e.peers[i] {
+				changed = true
+				break
+			}
+		}
+	}
+	if changed {
+		log.Printf("sync engine: peer list updated (%d peers)", len(peers))
+	}
+	e.peers = peers
+	e.mu.Unlock()
+}
+
 func (e *SyncEngine) SendNow() error {
 	data, contentType, err := readClipboard(e.board)
 	if err != nil {
@@ -167,8 +190,10 @@ func (e *SyncEngine) SendNow() error {
 	h := hashContent(data)
 	e.mu.Lock()
 	e.lastLocalHash = h
+	peers := make([]string, len(e.peers))
+	copy(peers, e.peers)
 	e.mu.Unlock()
 
-	e.sendToPeers(data, contentType)
+	e.sendToPeers(peers, data, contentType)
 	return nil
 }

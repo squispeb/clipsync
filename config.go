@@ -17,13 +17,16 @@ type Config struct {
 	SyncInterval int      `json:"sync_interval_ms"`
 	Token        string   `json:"token"`
 	DeviceName   string   `json:"device_name"`
+	AutoDiscover bool     `json:"auto_discover"`
 }
 
 func DefaultConfig() Config {
 	return Config{
+		Peers:        []string{},
 		Port:         8275,
 		MaxSize:      10 * 1024 * 1024,
 		SyncInterval: 500,
+		AutoDiscover: true,
 	}
 }
 

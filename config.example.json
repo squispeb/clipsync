@@ -1,12 +1,10 @@
 {
   "device_name": "my-laptop",
-  "peers": [
-    "100.64.0.2:8275",
-    "100.64.0.3:8275"
-  ],
+  "peers": [],
   "bind": "",
   "port": 8275,
   "max_size": 10485760,
   "sync_interval_ms": 500,
-  "token": ""
+  "token": "",
+  "auto_discover": true
 }

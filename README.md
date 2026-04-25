@@ -2,12 +2,13 @@
 
 Automatic cross-platform clipboard synchronization over [Tailscale](https://tailscale.com).
 
-Copy on one machine, paste on another — no hotkeys, no cloud, no accounts. Clipboard data travels directly between your devices through Tailscale's encrypted WireGuard tunnel.
+Copy on one machine, paste on another — no hotkeys, no cloud, no accounts, **no manual config needed**. Clipboard data travels directly between your devices through Tailscale's encrypted WireGuard tunnel.
 
-Forked from [weishh/cliplink](https://github.com/weishh/cliplink) with multi-peer auto-sync, deduplication, and simple token authentication.
+Forked from [weishh/cliplink](https://github.com/weishh/cliplink) with multi-peer auto-sync, deduplication, and automatic tailnet peer discovery.
 
 ## Features
 
+- **Zero-config setup** — run `clipsync daemon` and it auto-discovers peers on your tailnet
 - **Automatic background sync** — daemon polls clipboard changes and broadcasts to all peers
 - **Multi-peer** — sync across 2+ machines simultaneously
 - **Deduplication** — SHA-256 content hashing prevents echo loops
@@ -32,7 +33,8 @@ Machine A                          Machine B
 Each machine runs a daemon that:
 1. Listens for incoming clipboard data from peers
 2. Polls the local clipboard every `sync_interval_ms`
-3. Broadcasts changes to all configured peers
+3. Discovers other clipsync peers on the tailnet automatically
+4. Broadcasts changes to all reachable peers
 
 ## Installation
 
@@ -76,16 +78,34 @@ make build
 # Binaries in dist/
 ```
 
-## Quick Start
+## Quick Start (Zero Config)
 
-### 1. Find your Tailscale IPs
+### 1. Install Tailscale on all devices
 
-On each machine:
+Make sure Tailscale is installed, running, and all devices are on the same tailnet.
+
+### 2. Download clipsync on each device
+
+See Installation above.
+
+### 3. Just run the daemon
+
+On **every** device:
 ```bash
-tailscale status
+clipsync daemon
 ```
 
-### 2. Create config file
+That's it. On first run, clipsync creates a default config file and automatically scans your tailnet for other clipsync peers. Within seconds, your clipboards are syncing.
+
+### 4. Test it
+
+Copy some text on one machine, paste on another. It should just work.
+
+---
+
+## Manual Configuration (Optional)
+
+If you prefer to explicitly define peers or customize behavior, create a config file:
 
 **Linux:** `~/.config/clipsync/config.json`
 **macOS:** `~/Library/Application Support/clipsync/config.json`
@@ -102,43 +122,42 @@ tailscale status
   "port": 8275,
   "max_size": 10485760,
   "sync_interval_ms": 500,
-  "token": ""
+  "token": "",
+  "auto_discover": true
 }
 ```
 
 | Field | Default | Description |
 |---|---|---|
 | `device_name` | `""` | Friendly name for log output |
-| `peers` | `[]` | List of `<tailscale-ip>:<port>` for all other machines |
+| `peers` | `[]` | Explicit list of `<tailscale-ip>:<port>`. Merged with discovered peers |
 | `bind` | auto-detect | Interface to bind to. Empty = auto-detect Tailscale IP |
 | `port` | `8275` | Listen port |
 | `max_size` | `10485760` | Max clipboard payload in bytes (10 MB) |
 | `sync_interval_ms` | `500` | How often to poll clipboard for changes |
 | `token` | `""` | Optional shared secret. All peers must use the same token |
+| `auto_discover` | `true` | Automatically discover peers via `tailscale status` |
 
 **Tailscale IP auto-detection:** When `bind` is empty, the daemon scans interfaces for an IP in the Tailscale CGNAT range (`100.64.0.0/10`). The daemon is only reachable within your tailnet.
 
-### 3. Start the daemon on all machines
+## Commands
 
-```bash
-clipsync daemon
 ```
+clipsync <command> [options]
 
-Or run in receive-only mode (no broadcasting):
-```bash
-clipsync daemon --no-sync
-```
+Commands:
+  daemon      Start the clipboard receiver and sync daemon
+    --port <n>        Override listen port
+    --bind <addr>     Override bind address
+    --config <path>   Config file path
+    --no-sync         Receive-only mode
+    --no-discover     Disable auto-discovery
 
-### 4. Verify connectivity
-
-```bash
-clipsync status
-```
-
-### 5. Test manual broadcast
-
-```bash
-clipsync send
+  send        Manually broadcast clipboard to all peers
+  status      Check if peer daemons are reachable
+  peers       List configured peers
+  discover    Scan tailnet for clipsync peers
+  version     Print version
 ```
 
 ## Running as a Service
@@ -166,23 +185,15 @@ sudo launchctl start com.clipsync.daemon
 
 Use Task Scheduler to run `clipsync.exe daemon` at startup, or run it in a terminal session.
 
-## Commands
+## How Auto-Discovery Works
 
-```
-clipsync <command> [options]
+1. When the daemon starts, it runs `tailscale status --json` to get all devices on your tailnet
+2. It filters out itself and offline devices
+3. It probes each online peer's Tailscale IP on the configured port
+4. If a peer responds with a valid `/health` endpoint, it's added to the peer list
+5. Re-discovery happens every 60 seconds, so new devices joining your tailnet are picked up automatically
 
-Commands:
-  daemon      Start the clipboard receiver and sync daemon
-    --port <n>      Override listen port
-    --bind <addr>   Override bind address
-    --config <path> Config file path
-    --no-sync       Receive-only mode
-
-  send        Manually broadcast clipboard to all peers
-  status      Check if peer daemons are reachable
-  peers       List configured peers
-  version     Print version
-```
+If you set `auto_discover: false` or use `--no-discover`, only manually configured peers are used.
 
 ## Security
 
