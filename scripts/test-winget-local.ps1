@@ -7,10 +7,20 @@ $ErrorActionPreference = "Stop"
 
 $distDir = Join-Path $RepoRoot "dist"
 $zipPath = Join-Path $distDir "clipsync-windows-portable.zip"
+$exePath = Join-Path $distDir "clipsync-windows-amd64.exe"
 $manifestDir = Join-Path $RepoRoot "winget\local"
 
 if (-not (Test-Path $zipPath)) {
-    throw "Missing $zipPath. Run 'make build-windows-portable' first."
+    Write-Host "Portable zip missing, building it now..." -ForegroundColor Yellow
+    New-Item -ItemType Directory -Path $distDir -Force | Out-Null
+    $env:GOOS = "windows"
+    $env:GOARCH = "amd64"
+    $env:CGO_ENABLED = "0"
+    & go build -ldflags="-s -w -X main.version=0.4.0" -o $exePath .
+    if ($LASTEXITCODE -ne 0) {
+        throw "go build failed"
+    }
+    Compress-Archive -Path $exePath -DestinationPath $zipPath -Force
 }
 
 $serverJob = Start-Job -ArgumentList $zipPath, $Port -ScriptBlock {
