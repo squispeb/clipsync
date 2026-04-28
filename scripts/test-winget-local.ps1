@@ -9,6 +9,7 @@ $distDir = Join-Path $RepoRoot "dist"
 $zipPath = Join-Path $distDir "clipsync-windows-portable.zip"
 $exePath = Join-Path $distDir "clipsync-windows-amd64.exe"
 $manifestDir = Join-Path $RepoRoot "winget\local"
+$tempManifestDir = Join-Path $RepoRoot "winget\local-temp"
 
 if (-not (Test-Path $zipPath)) {
     Write-Host "Portable zip missing, building it now..." -ForegroundColor Yellow
@@ -22,6 +23,22 @@ if (-not (Test-Path $zipPath)) {
     }
     Compress-Archive -Path $exePath -DestinationPath $zipPath -Force
 }
+
+$hash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+if (Test-Path $tempManifestDir) {
+    Remove-Item $tempManifestDir -Recurse -Force
+}
+New-Item -ItemType Directory -Path $tempManifestDir -Force | Out-Null
+
+Copy-Item (Join-Path $manifestDir "ClipSync.yaml") $tempManifestDir -Force
+Copy-Item (Join-Path $manifestDir "ClipSync.locale.en-US.yaml") $tempManifestDir -Force
+Copy-Item (Join-Path $manifestDir "ClipSync.installer.yaml") $tempManifestDir -Force
+
+$installerFile = Join-Path $tempManifestDir "ClipSync.installer.yaml"
+(Get-Content $installerFile) |
+    ForEach-Object { $_ -replace '^\s*InstallerSha256:.*$', "    InstallerSha256: $hash" } |
+    Set-Content $installerFile -Encoding utf8
 
 $serverJob = Start-Job -ArgumentList $zipPath, $Port -ScriptBlock {
     param($ZipPath, $Port)
@@ -68,7 +85,7 @@ $serverJob = Start-Job -ArgumentList $zipPath, $Port -ScriptBlock {
 try {
     Start-Sleep -Seconds 1
     winget settings --enable LocalManifestFiles | Out-Null
-    winget install --manifest $manifestDir --silent --accept-package-agreements --accept-source-agreements
+    winget install --manifest $tempManifestDir --silent --accept-package-agreements --accept-source-agreements
 } finally {
     Stop-Job $serverJob -ErrorAction SilentlyContinue | Out-Null
     Remove-Job $serverJob -Force -ErrorAction SilentlyContinue | Out-Null
