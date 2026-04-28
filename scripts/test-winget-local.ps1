@@ -85,7 +85,7 @@ $serverJob = Start-Job -ArgumentList $zipPath, $Port -ScriptBlock {
 try {
     Start-Sleep -Seconds 1
     winget settings --enable LocalManifestFiles | Out-Null
-    winget install --manifest $tempManifestDir --silent --accept-package-agreements --accept-source-agreements
+    winget install --manifest $tempManifestDir --silent --accept-package-agreements --accept-source-agreements --no-proxy
 } finally {
     Stop-Job $serverJob -ErrorAction SilentlyContinue | Out-Null
     Remove-Job $serverJob -Force -ErrorAction SilentlyContinue | Out-Null
