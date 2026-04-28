@@ -21,6 +21,16 @@ ClipSync can be published to `winget` as a portable package.
 3. Generate a manifest with `wingetcreate new`.
 4. Submit the manifest to `microsoft/winget-pkgs`.
 
+## Local test
+
+Run the helper script from the repo root on Windows:
+
+```powershell
+.\scripts\test-winget-local.ps1
+```
+
+It starts a tiny localhost file server, enables local manifests, and runs `winget install` against the local manifest folder.
+
 ## Notes
 
 - Winget is the installer entrypoint, not `clipsync install`.
