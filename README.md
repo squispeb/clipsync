@@ -53,6 +53,18 @@ sudo mv clipsync-linux-amd64 /usr/local/bin/clipsync
 # Download clipsync-windows-amd64.exe from the releases page
 ```
 
+### One-command install on Windows
+
+If you're on Windows, you can install clipsync with one command after downloading the binary:
+
+```powershell
+clipsync install
+```
+
+It installs to `%LOCALAPPDATA%\ClipSync\clipsync.exe` and adds that folder to your user PATH.
+
+If you want a proper package manager install, see `docs/winget.md`.
+
 > **macOS users:** The clipboard library (`golang.design/x/clipboard`) requires CGO on macOS, so cross-compiled release binaries won't work. You must build from source on a Mac (see below).
 
 ### Build from source
@@ -205,7 +217,7 @@ sudo launchctl start com.clipsync.daemon
 
 ### Windows
 
-Use Task Scheduler to run `clipsync.exe daemon` at startup, or run it in a terminal session.
+Use Task Scheduler to run `clipsync.exe daemon` at startup, or run `clipsync install` once to add it to your user PATH.
 
 ## Clipboard History
 

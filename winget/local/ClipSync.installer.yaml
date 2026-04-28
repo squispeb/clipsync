@@ -1,0 +1,17 @@
+PackageIdentifier: Squispeb.ClipSync
+PackageVersion: 0.4.0
+InstallerType: zip
+InstallModes:
+  - silent
+  - interactive
+ArchiveBinariesDependOnPath: true
+Installers:
+  - Architecture: x64
+    InstallerUrl: file:///C:/Users/squispeb/clipsync/dist/clipsync-windows-portable.zip
+    InstallerSha256: 39077b204ac741aeca22fd50850e0ead6099e7aeacf665c680e3de7b0a880cec
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: clipsync-windows-amd64.exe
+        PortableCommandAlias: clipsync
+ManifestType: installer
+ManifestVersion: 1.12.0

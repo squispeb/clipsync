@@ -1,4 +1,4 @@
-.PHONY: build build-mac build-mac-native build-linux build-windows test clean
+.PHONY: build build-mac build-mac-native build-linux build-windows build-windows-portable test clean
 
 VERSION := 0.4.0
 BINARY  := clipsync
@@ -13,7 +13,7 @@ endif
 # NOTE: macOS binaries MUST be built natively on macOS because
 # golang.design/x/clipboard requires CGO on Darwin.
 # Cross-compiling from Linux produces a broken binary.
-build: build-mac-native build-linux build-windows
+build: build-mac-native build-linux build-windows build-windows-portable
 
 # Cross-compiled macOS binaries (BROKEN — no CGO support)
 # Only use for testing non-clipboard code.
@@ -35,6 +35,10 @@ build-linux:
 build-windows:
 	@mkdir -p dist
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=$(VERSION)" -o dist/$(BINARY)-windows-amd64.exe .
+
+build-windows-portable: build-windows
+	@mkdir -p dist
+	cd dist && zip -j $(BINARY)-windows-portable.zip $(BINARY)-windows-amd64.exe >/dev/null
 
 test:
 	go test -v ./...

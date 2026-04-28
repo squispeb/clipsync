@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"runtime"
 	"syscall"
 	"time"
 )
@@ -40,6 +41,8 @@ func main() {
 		err = cmdDiscover(os.Args[2:])
 	case "history":
 		err = cmdHistory(os.Args[2:])
+	case "install":
+		err = cmdInstall(os.Args[2:])
 	case "version":
 		fmt.Printf("clipsync %s\n", version)
 	case "help", "-h", "--help":
@@ -67,9 +70,28 @@ func printUsage() {
 	fmt.Println("  peers      List configured peers")
 	fmt.Println("  discover   Scan tailnet for clipsync peers")
 	fmt.Println("  history    Show clipboard history")
+	fmt.Println("  install    Install clipsync for the current user")
 	fmt.Println("  version    Print version")
 	fmt.Println()
 	fmt.Println("Config file: " + ConfigPath())
+}
+
+func cmdInstall(args []string) error {
+	fs := flag.NewFlagSet("install", flag.ExitOnError)
+	fs.Parse(args)
+
+	if runtime.GOOS != "windows" {
+		return fmt.Errorf("install is only supported on Windows")
+	}
+
+	path, err := installSelf()
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("installed clipsync to %s\n", path)
+	fmt.Println("restart your terminal to pick up PATH changes")
+	return nil
 }
 
 func loadConfig(flagConfig string) (Config, error) {

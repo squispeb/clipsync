@@ -1,188 +1,123 @@
 # ============================================================
-# Cliplink Windows Setup Script
-# Run in PowerShell (Admin not required)
+# ClipSync Windows Setup Script
+# Run in PowerShell (Admin NOT required)
 # ============================================================
 
 $ErrorActionPreference = "Stop"
 
 # --- Config ---
-$CLIPLINK_DIR   = "$env:LOCALAPPDATA\cliplink"
-$CLIPLINK_EXE   = "$CLIPLINK_DIR\cliplink.exe"
-$CONFIG_DIR     = "$env:APPDATA\cliplink"
+$CLIPSYNC_DIR   = "$env:LOCALAPPDATA\clipsync"
+$CLIPSYNC_EXE   = "$CLIPSYNC_DIR\clipsync.exe"
+$CONFIG_DIR     = "$env:APPDATA\clipsync"
 $CONFIG_FILE    = "$CONFIG_DIR\config.json"
 $STARTUP_DIR    = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
-$MAC_PEER       = "100.85.255.70:8275"  # <-- Change to your Mac's Tailscale IP
-$LISTEN_PORT    = 8275
+$VERSION        = "0.4.0"
+$DOWNLOAD_URL   = "https://github.com/squispeb/clipsync/releases/download/v$VERSION/clipsync-windows-amd64.exe"
 
-# --- Step 0: Clean previous installation ---
-Write-Host "`n[0/5] Cleaning previous installation..." -ForegroundColor Cyan
+# --- Step 1: Download and install ---
+Write-Host "`n[1/3] Installing ClipSync v$VERSION..." -ForegroundColor Cyan
 
-# Stop running cliplink processes
-$procs = Get-Process -Name "cliplink" -ErrorAction SilentlyContinue
-if ($procs) {
-    $procs | Stop-Process -Force
-    Write-Host "  Stopped running cliplink processes" -ForegroundColor Yellow
-}
+New-Item -ItemType Directory -Path $CLIPSYNC_DIR -Force | Out-Null
 
-# Remove old files
-foreach ($path in @($CLIPLINK_DIR, $CONFIG_DIR)) {
-    if (Test-Path $path) {
-        Remove-Item $path -Recurse -Force
-        Write-Host "  Removed: $path" -ForegroundColor Yellow
-    }
-}
-foreach ($path in @(
-    "$STARTUP_DIR\cliplink-daemon.vbs",
-    "$STARTUP_DIR\cliplink-hotkey.lnk"
-)) {
-    if (Test-Path $path) {
-        Remove-Item $path -Force
-        Write-Host "  Removed: $path" -ForegroundColor Yellow
-    }
-}
-
-Write-Host "  Clean slate" -ForegroundColor Green
-
-# --- Step 1: Install binary ---
-Write-Host "`n[1/5] Installing cliplink..." -ForegroundColor Cyan
-
-New-Item -ItemType Directory -Path $CLIPLINK_DIR -Force | Out-Null
-
-# Look for the binary in common Taildrop locations
+# Check if binary already exists in common locations
 $sources = @(
-    "$env:USERPROFILE\Downloads\cliplink-windows-amd64.exe",
-    "$env:USERPROFILE\Desktop\cliplink-windows-amd64.exe",
-    # Taildrop default on some Windows versions
-    "$env:USERPROFILE\Downloads\Taildrop\cliplink-windows-amd64.exe"
+    "$env:USERPROFILE\Downloads\clipsync-windows-amd64.exe",
+    "$env:USERPROFILE\Desktop\clipsync-windows-amd64.exe",
+    "$env:USERPROFILE\Downloads\Taildrop\clipsync-windows-amd64.exe"
 )
 
 $found = $false
 foreach ($src in $sources) {
     if (Test-Path $src) {
-        Copy-Item $src $CLIPLINK_EXE -Force
-        Write-Host "  Copied from: $src" -ForegroundColor Green
+        Copy-Item $src $CLIPSYNC_EXE -Force
+        Write-Host "  Installed from: $src" -ForegroundColor Green
         $found = $true
         break
     }
 }
 
+# If not found locally, download from GitHub
 if (-not $found) {
-    Write-Host "  Binary not found in Downloads/Desktop." -ForegroundColor Yellow
-    Write-Host "  Please copy cliplink-windows-amd64.exe to: $CLIPLINK_EXE" -ForegroundColor Yellow
-    Write-Host "  Then re-run this script." -ForegroundColor Yellow
-    exit 1
+    Write-Host "  Downloading from GitHub..." -ForegroundColor Yellow
+    try {
+        Invoke-WebRequest -Uri $DOWNLOAD_URL -OutFile $CLIPSYNC_EXE -UseBasicParsing
+        Write-Host "  Downloaded to: $CLIPSYNC_EXE" -ForegroundColor Green
+    } catch {
+        Write-Host "  Download failed: $_" -ForegroundColor Red
+        Write-Host "  Please download manually from:" -ForegroundColor Yellow
+        Write-Host "  https://github.com/squispeb/clipsync/releases" -ForegroundColor Yellow
+        exit 1
+    }
 }
 
 # Verify
-$ver = & $CLIPLINK_EXE version 2>&1
-Write-Host "  Installed: $ver" -ForegroundColor Green
+$ver = & $CLIPSYNC_EXE version 2>&1
+Write-Host "  $ver" -ForegroundColor Green
 
 # --- Step 2: Create config ---
-Write-Host "`n[2/5] Creating config..." -ForegroundColor Cyan
+Write-Host "`n[2/3] Creating default config..." -ForegroundColor Cyan
 
 New-Item -ItemType Directory -Path $CONFIG_DIR -Force | Out-Null
 
-$config = @"
+if (-not (Test-Path $CONFIG_FILE)) {
+    $config = @"
 {
-  "peer": "$MAC_PEER",
-  "port": $LISTEN_PORT,
-  "max_size": 10485760
+  "device_name": "$env:COMPUTERNAME",
+  "peers": [],
+  "bind": "",
+  "port": 8275,
+  "max_size": 10485760,
+  "sync_interval_ms": 500,
+  "token": "",
+  "auto_discover": true,
+  "history_max_items": 100,
+  "history_max_memory_mb": 50
 }
 "@
-# Write without BOM — PowerShell 5's -Encoding utf8 adds BOM which breaks Go's JSON parser
-[System.IO.File]::WriteAllText($CONFIG_FILE, $config, [System.Text.UTF8Encoding]::new($false))
-Write-Host "  Config: $CONFIG_FILE" -ForegroundColor Green
-Write-Host "  Peer: $MAC_PEER" -ForegroundColor Green
-
-# --- Step 3: Test connectivity ---
-Write-Host "`n[3/5] Testing connection to Mac..." -ForegroundColor Cyan
-
-$statusResult = & $CLIPLINK_EXE status 2>&1
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "  Mac daemon reachable: $statusResult" -ForegroundColor Green
+    [System.IO.File]::WriteAllText($CONFIG_FILE, $config, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "  Config: $CONFIG_FILE" -ForegroundColor Green
 } else {
-    Write-Host "  Mac daemon not reachable (is it running?): $statusResult" -ForegroundColor Yellow
-    Write-Host "  Continuing setup anyway..." -ForegroundColor Yellow
+    Write-Host "  Config already exists: $CONFIG_FILE" -ForegroundColor Yellow
 }
 
-# --- Step 4: Auto-start daemon ---
-Write-Host "`n[4/5] Setting up daemon auto-start..." -ForegroundColor Cyan
+# --- Step 3: Auto-start setup ---
+Write-Host "`n[3/3] Setting up auto-start..." -ForegroundColor Cyan
 
-$vbsContent = @"
-Set WshShell = CreateObject("WScript.Shell")
-WshShell.Run """$CLIPLINK_EXE"" daemon", 0, False
-"@
-$vbsPath = "$STARTUP_DIR\cliplink-daemon.vbs"
-$vbsContent | Out-File -Encoding ascii $vbsPath
-Write-Host "  Startup script: $vbsPath" -ForegroundColor Green
+# Create a simple batch file for startup
+$batchContent = @"
+@echo off
+start /min "" "$CLIPSYNC_EXE" daemon
+""@
+$batchPath = "$STARTUP_DIR\clipsync-startup.bat"
+$batchContent | Out-File -Encoding ascii $batchPath
+Write-Host "  Startup script: $batchPath" -ForegroundColor Green
 
 # Start daemon now
 Write-Host "  Starting daemon..." -ForegroundColor Cyan
-Start-Process -FilePath $CLIPLINK_EXE -ArgumentList "daemon" -WindowStyle Hidden
-Start-Sleep -Seconds 1
+Start-Process -FilePath $CLIPSYNC_EXE -ArgumentList "daemon" -WindowStyle Hidden
+Start-Sleep -Seconds 2
 
 # Verify daemon is running
-$proc = Get-Process -Name "cliplink" -ErrorAction SilentlyContinue
+$proc = Get-Process -Name "clipsync" -ErrorAction SilentlyContinue
 if ($proc) {
     Write-Host "  Daemon running (PID: $($proc.Id))" -ForegroundColor Green
 } else {
     Write-Host "  Warning: daemon may not have started" -ForegroundColor Yellow
 }
 
-# --- Step 5: Hotkey setup (AutoHotkey) ---
-Write-Host "`n[5/5] Setting up hotkey..." -ForegroundColor Cyan
-
-$ahkScript = @"
-; Cliplink: Ctrl+Alt+V to send clipboard to remote
-; (mirrors Cmd+Option+V on Mac)
-#Requires AutoHotkey v2.0
-
-^!v::
-{
-    result := RunWait('"$($CLIPLINK_EXE.Replace('\','\\'))" send',, "Hide")
-    if (result = 0)
-        ToolTip("Clipboard sent")
-    else
-        ToolTip("Send failed")
-    SetTimer(() => ToolTip(), -1500)
-}
-"@
-$ahkPath = "$CLIPLINK_DIR\cliplink-hotkey.ahk"
-[System.IO.File]::WriteAllText($ahkPath, $ahkScript, [System.Text.UTF8Encoding]::new($false))
-
-# Create startup shortcut for AHK script
-$ahkExe = "${env:ProgramFiles}\AutoHotkey\v2\AutoHotkey64.exe"
-if (-not (Test-Path $ahkExe)) {
-    $ahkExe = "${env:ProgramFiles}\AutoHotkey\AutoHotkey.exe"
-}
-
-if (Test-Path $ahkExe) {
-    $WshShell = New-Object -ComObject WScript.Shell
-    $Shortcut = $WshShell.CreateShortcut("$STARTUP_DIR\cliplink-hotkey.lnk")
-    $Shortcut.TargetPath = $ahkExe
-    $Shortcut.Arguments = """$ahkPath"""
-    $Shortcut.Save()
-    Write-Host "  AHK script: $ahkPath" -ForegroundColor Green
-    Write-Host "  Hotkey: Ctrl+Alt+V" -ForegroundColor Green
-
-    # Start hotkey now
-    Start-Process -FilePath $ahkExe -ArgumentList """$ahkPath"""
-    Write-Host "  Hotkey active!" -ForegroundColor Green
-} else {
-    Write-Host "  AutoHotkey not found." -ForegroundColor Yellow
-    Write-Host "  Install from: https://www.autohotkey.com/" -ForegroundColor Yellow
-    Write-Host "  Then run: $ahkPath" -ForegroundColor Yellow
-}
-
 # --- Done ---
 Write-Host "`n============================================" -ForegroundColor Cyan
-Write-Host "  Cliplink setup complete!" -ForegroundColor Green
+Write-Host "  ClipSync setup complete!" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  Binary:  $CLIPLINK_EXE"
+Write-Host "  Binary:  $CLIPSYNC_EXE"
 Write-Host "  Config:  $CONFIG_FILE"
 Write-Host "  Daemon:  Running (auto-starts on login)"
-Write-Host "  Hotkey:  Ctrl+Alt+V (send clipboard to Mac)"
 Write-Host ""
-Write-Host "  Test: copy text, press Ctrl+Alt+V, then Cmd+V on Mac"
+Write-Host "  Commands:"
+Write-Host "    clipsync status     - Check peer connectivity"
+Write-Host "    clipsync history    - View clipboard history"
+Write-Host "    clipsync peers      - List configured peers"
+Write-Host ""
+Write-Host "  Note: Ensure Tailscale is running on all devices."
 Write-Host ""
