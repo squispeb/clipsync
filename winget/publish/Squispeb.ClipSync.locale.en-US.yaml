@@ -1,0 +1,16 @@
+PackageIdentifier: Squispeb.ClipSync
+PackageVersion: 0.4.0
+PackageLocale: en-US
+Publisher: Squispeb
+PackageName: ClipSync
+PackageUrl: https://github.com/squispeb/clipsync
+License: MIT
+ShortDescription: Automatic cross-platform clipboard synchronization over Tailscale.
+Moniker: clipsync
+Tags:
+  - clipboard
+  - tailscale
+  - sync
+  - utilities
+ManifestType: defaultLocale
+ManifestVersion: 1.12.0
