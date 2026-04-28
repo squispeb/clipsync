@@ -7,7 +7,7 @@ InstallModes:
 ArchiveBinariesDependOnPath: true
 Installers:
   - Architecture: x64
-    InstallerUrl: file:///C:/Users/squispeb/clipsync/dist/clipsync-windows-portable.zip
+    InstallerUrl: http://127.0.0.1:8000/clipsync-windows-portable.zip
     InstallerSha256: 39077b204ac741aeca22fd50850e0ead6099e7aeacf665c680e3de7b0a880cec
     NestedInstallerType: portable
     NestedInstallerFiles:
