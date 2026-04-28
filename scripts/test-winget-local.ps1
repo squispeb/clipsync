@@ -44,37 +44,26 @@ $serverJob = Start-Job -ArgumentList $zipPath, $Port -ScriptBlock {
     param($ZipPath, $Port)
 
     $bytes = [System.IO.File]::ReadAllBytes($ZipPath)
-    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, [int]$Port)
+    $listener = [System.Net.HttpListener]::new()
+    $listener.Prefixes.Add("http://127.0.0.1:$Port/")
     $listener.Start()
 
     try {
         while ($true) {
-            $client = $listener.AcceptTcpClient()
+            $context = $listener.GetContext()
             try {
-                $stream = $client.GetStream()
-                $reader = New-Object System.IO.StreamReader($stream)
-                $requestLine = $reader.ReadLine()
-
-                while ($true) {
-                    $line = $reader.ReadLine()
-                    if ([string]::IsNullOrEmpty($line)) {
-                        break
-                    }
-                }
-
-                if ($requestLine -like 'GET /clipsync-windows-portable.zip*') {
-                    $header = "HTTP/1.1 200 OK`r`nContent-Type: application/zip`r`nContent-Length: $($bytes.Length)`r`nConnection: close`r`n`r`n"
-                    $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($header)
-                    $stream.Write($headerBytes, 0, $headerBytes.Length)
-                    $stream.Write($bytes, 0, $bytes.Length)
+                $response = $context.Response
+                if ($context.Request.RawUrl -eq "/clipsync-windows-portable.zip") {
+                    $response.StatusCode = 200
+                    $response.ContentType = "application/zip"
+                    $response.ContentLength64 = $bytes.Length
+                    $response.OutputStream.Write($bytes, 0, $bytes.Length)
                 } else {
-                    $notFound = [System.Text.Encoding]::ASCII.GetBytes("HTTP/1.1 404 Not Found`r`nContent-Length: 0`r`nConnection: close`r`n`r`n")
-                    $stream.Write($notFound, 0, $notFound.Length)
+                    $response.StatusCode = 404
                 }
-
-                $stream.Close()
+                $response.OutputStream.Close()
             } finally {
-                $client.Close()
+                $context.Response.Close()
             }
         }
     } finally {
@@ -83,7 +72,15 @@ $serverJob = Start-Job -ArgumentList $zipPath, $Port -ScriptBlock {
 }
 
 try {
-    Start-Sleep -Seconds 1
+    $probeUrl = "http://127.0.0.1:$Port/clipsync-windows-portable.zip"
+    for ($i = 0; $i -lt 10; $i++) {
+        try {
+            Invoke-WebRequest -Uri $probeUrl -Method Head -UseBasicParsing | Out-Null
+            break
+        } catch {
+            Start-Sleep -Seconds 1
+        }
+    }
     winget settings --enable LocalManifestFiles | Out-Null
     winget install --manifest $tempManifestDir --silent --accept-package-agreements --accept-source-agreements --no-proxy
 } finally {
