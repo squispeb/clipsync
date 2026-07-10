@@ -18,6 +18,7 @@ type Server struct {
 	bind       string
 	port       int
 	token      string
+	version    string
 	history    *History
 	device     string
 	onReceive  func(data []byte, contentType string)
@@ -25,13 +26,14 @@ type Server struct {
 	httpSrv    *http.Server
 }
 
-func NewServer(board Board, bind string, port int, maxSize int64, token string, history *History, device string, onReceive func(data []byte, contentType string)) *Server {
+func NewServer(board Board, bind string, port int, maxSize int64, token string, version string, history *History, device string, onReceive func(data []byte, contentType string)) *Server {
 	s := &Server{
 		board:     board,
 		maxSize:   maxSize,
 		bind:      bind,
 		port:      port,
 		token:     token,
+		version:   version,
 		history:   history,
 		device:    device,
 		onReceive: onReceive,
@@ -88,6 +90,10 @@ func (s *Server) handleClipboard(w http.ResponseWriter, r *http.Request) {
 	if len(data) == 0 {
 		http.Error(w, "empty body", http.StatusBadRequest)
 		return
+	}
+
+	if peerVersion := r.Header.Get("X-ClipSync-Version"); peerVersion != "" && peerVersion != s.version {
+		log.Printf("version mismatch: peer %s is running v%s (local v%s)", r.RemoteAddr, peerVersion, s.version)
 	}
 
 	contentType := r.Header.Get("Content-Type")

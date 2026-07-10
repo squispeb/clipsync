@@ -19,6 +19,7 @@ type SyncEngine struct {
 	maxSize  int64
 	token    string
 	device   string
+	version  string
 	client   *http.Client
 	interval time.Duration
 	history  *History
@@ -29,7 +30,7 @@ type SyncEngine struct {
 	lastRemoteHash string
 }
 
-func NewSyncEngine(board Board, cfg Config, history *History) *SyncEngine {
+func NewSyncEngine(board Board, cfg Config, history *History, version string) *SyncEngine {
 	interval := time.Duration(cfg.SyncInterval) * time.Millisecond
 	if interval <= 0 {
 		interval = 500 * time.Millisecond
@@ -40,6 +41,7 @@ func NewSyncEngine(board Board, cfg Config, history *History) *SyncEngine {
 		maxSize:  cfg.MaxSize,
 		token:    cfg.Token,
 		device:   cfg.DeviceName,
+		version:  version,
 		interval: interval,
 		history:  history,
 		client: &http.Client{
@@ -131,6 +133,7 @@ func (e *SyncEngine) sendToPeer(peer string, data []byte, contentType string) er
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("X-ClipSync-Version", e.version)
 	if e.token != "" {
 		req.Header.Set("X-ClipSync-Token", e.token)
 	}

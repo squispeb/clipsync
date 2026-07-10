@@ -159,8 +159,8 @@ func cmdDaemon(args []string) error {
 	}
 
 	history := NewHistory(cfg.HistoryItems, cfg.HistoryMemory*1024*1024)
-	engine := NewSyncEngine(board, cfg, history)
-	srv := NewServer(board, cfg.Bind, cfg.Port, cfg.MaxSize, cfg.Token, history, cfg.DeviceName, engine.OnRemoteContent)
+	engine := NewSyncEngine(board, cfg, history, version)
+	srv := NewServer(board, cfg.Bind, cfg.Port, cfg.MaxSize, cfg.Token, version, history, cfg.DeviceName, engine.OnRemoteContent)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -247,7 +247,7 @@ func cmdSend(args []string) error {
 	}
 
 	history := NewHistory(cfg.HistoryItems, cfg.HistoryMemory*1024*1024)
-	engine := NewSyncEngine(board, cfg, history)
+	engine := NewSyncEngine(board, cfg, history, version)
 	if err := engine.SendNow(); err != nil {
 		return err
 	}
