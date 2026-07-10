@@ -43,7 +43,7 @@ func NewSyncEngine(board Board, cfg Config, history *History) *SyncEngine {
 		interval: interval,
 		history:  history,
 		client: &http.Client{
-			Timeout: 15 * time.Second,
+			Timeout: 5 * time.Second,
 			Transport: &http.Transport{
 				Proxy: nil,
 				DialContext: (&net.Dialer{
