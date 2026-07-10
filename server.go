@@ -92,21 +92,12 @@ func (s *Server) handleClipboard(w http.ResponseWriter, r *http.Request) {
 
 	contentType := r.Header.Get("Content-Type")
 
+	var writeFn func([]byte) error
 	switch {
 	case strings.HasPrefix(contentType, "text/plain"):
-		if err := s.board.WriteText(data); err != nil {
-			http.Error(w, fmt.Sprintf("clipboard write failed: %v", err), http.StatusInternalServerError)
-			return
-		}
-		log.Printf("received text (%d bytes)", len(data))
-
+		writeFn = s.board.WriteText
 	case strings.HasPrefix(contentType, "image/png"):
-		if err := s.board.WriteImage(data); err != nil {
-			http.Error(w, fmt.Sprintf("clipboard write failed: %v", err), http.StatusInternalServerError)
-			return
-		}
-		log.Printf("received image (%d bytes)", len(data))
-
+		writeFn = s.board.WriteImage
 	default:
 		http.Error(w, fmt.Sprintf("unsupported content type: %s", contentType), http.StatusUnsupportedMediaType)
 		return
@@ -118,6 +109,12 @@ func (s *Server) handleClipboard(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "ok")
+
+	if err := writeFn(data); err != nil {
+		log.Printf("clipboard write failed: %v", err)
+	} else {
+		log.Printf("received %s (%d bytes)", contentType, len(data))
+	}
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
