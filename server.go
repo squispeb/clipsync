@@ -109,12 +109,17 @@ func (s *Server) handleClipboard(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "ok")
-
-	if err := writeFn(data); err != nil {
-		log.Printf("clipboard write failed: %v", err)
-	} else {
-		log.Printf("received %s (%d bytes)", contentType, len(data))
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
 	}
+
+	go func() {
+		if err := writeFn(data); err != nil {
+			log.Printf("clipboard write failed: %v", err)
+		} else {
+			log.Printf("received %s (%d bytes)", contentType, len(data))
+		}
+	}()
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {

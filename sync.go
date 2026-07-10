@@ -115,17 +115,13 @@ func (e *SyncEngine) syncOnce() {
 }
 
 func (e *SyncEngine) sendToPeers(peers []string, data []byte, contentType string) {
-	var wg sync.WaitGroup
 	for _, peer := range peers {
-		wg.Add(1)
 		go func(p string) {
-			defer wg.Done()
 			if err := e.sendToPeer(p, data, contentType); err != nil {
 				log.Printf("send to %s failed: %v", p, err)
 			}
 		}(peer)
 	}
-	wg.Wait()
 }
 
 func (e *SyncEngine) sendToPeer(peer string, data []byte, contentType string) error {
