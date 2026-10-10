@@ -1,0 +1,41 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write      # create the release
+  id-token: write      # sign build provenance
+  attestations: write  # store it
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+      # Verifiable with: gh attestation verify <file> --repo squispeb/clipsync
+      # (mise checks these automatically).
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-checksums: ./dist/checksums.txt
+      - name: Attach winget manifests
+        run: |
+          cd dist && zip -r winget-manifests.zip winget
+          gh release upload "$GITHUB_REF_NAME" winget-manifests.zip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -12,13 +12,25 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
 
-// Overridden at build time with -ldflags "-X main.version=...".
-var version = "0.5.0"
+// Release builds set this with -ldflags "-X main.version=..."; `go install`
+// builds get it from the module version in init.
+var version = "0.5.0-dev"
+
+func init() {
+	if !strings.HasSuffix(version, "-dev") {
+		return
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && strings.HasPrefix(info.Main.Version, "v") {
+		version = strings.TrimPrefix(info.Main.Version, "v")
+	}
+}
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -34,6 +46,12 @@ func main() {
 		err = cmdInit(os.Args[2:])
 	case "token":
 		err = cmdToken(os.Args[2:])
+	case "setup":
+		err = cmdSetup(os.Args[2:])
+	case "pair":
+		err = cmdPair(os.Args[2:])
+	case "service":
+		err = cmdService(os.Args[2:])
 	case "daemon":
 		err = cmdDaemon(os.Args[2:])
 	case "send":
@@ -69,7 +87,10 @@ func printUsage() {
 	fmt.Println("Usage: clipsync <command> [options]")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  init       Create or update the config (token, peers); see clipsync init -h")
+	fmt.Println("  setup      Set up this machine: checks, join or start a group, run at login")
+	fmt.Println("  pair       Show a code that lets another machine join this group")
+	fmt.Println("  service    Manage the background service: install, uninstall, status")
+	fmt.Println("  init       Create or update the config non-interactively (token, peers)")
 	fmt.Println("  token      Print the configured token, for setting up another machine")
 	fmt.Println("  daemon     Start the clipboard receiver and sync daemon")
 	fmt.Println("  send       Manually broadcast clipboard to all peers")
@@ -120,7 +141,12 @@ func cmdDaemon(args []string) error {
 	noSync := fs.Bool("no-sync", false, "disable auto-sync (receive-only mode)")
 	noDiscover := fs.Bool("no-discover", false, "disable auto-discovery")
 	logFile := fs.String("log-file", "", "append logs to this file instead of stderr (for background runs on Windows)")
+	detach := fs.Bool("detach", false, "start in the background and return (Windows; used by the login entry)")
 	fs.Parse(args)
+
+	if *detach {
+		return detachDaemon(args)
+	}
 
 	if *logFile != "" {
 		f, err := os.OpenFile(*logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
@@ -161,36 +187,29 @@ func cmdDaemon(args []string) error {
 		return fmt.Errorf("clipboard init: %w", err)
 	}
 
-	// Auto-discovery
-	if cfg.AutoDiscover && !*noDiscover {
-		discovered, err := DiscoverPeers(cfg.Port, cfg.Token, 3*time.Second)
-		if err != nil {
-			log.Printf("auto-discovery failed: %v", err)
-		} else {
-			if len(discovered) > 0 {
-				log.Printf("auto-discovered %d peer(s): %v", len(discovered), discovered)
-			}
-			newPeers := MergePeerLists(cfg.Peers, discovered)
-			if len(newPeers) != len(cfg.Peers) {
-				cfg.Peers = newPeers
-				configPath := *configPath
-				if configPath == "" {
-					configPath = ConfigPath()
-				}
-				if err := SaveConfig(configPath, cfg); err != nil {
-					log.Printf("warning: failed to save config: %v", err)
-				} else {
-					log.Printf("saved %d peer(s) to config", len(cfg.Peers))
-				}
-			} else {
-				cfg.Peers = newPeers
-			}
-		}
+	path := *configPath
+	if path == "" {
+		path = ConfigPath()
 	}
+	self := net.JoinHostPort(cfg.Bind, strconv.Itoa(cfg.Port))
 
 	history := NewHistory(cfg.HistoryItems, cfg.HistoryMemory*1024*1024)
 	engine := NewSyncEngine(board, cfg, history, version)
+	book := NewPeerBook(cfg, path, self, engine)
 	srv := NewServer(board, cfg.Bind, cfg.Port, cfg.MaxSize, cfg.Token, version, history, cfg.DeviceName, engine.OnRemoteContent)
+	srv.EnablePeers(book, self)
+
+	discover := func() {
+		discovered, err := DiscoverPeers(cfg.Port, cfg.Token, 3*time.Second)
+		if err != nil {
+			log.Printf("auto-discovery failed: %v", err)
+			return
+		}
+		book.Add(discovered...)
+	}
+	if cfg.AutoDiscover && !*noDiscover {
+		discover()
+	}
 
 	go func() {
 		<-ctx.Done()
@@ -204,12 +223,16 @@ func cmdDaemon(args []string) error {
 		go engine.Start(ctx)
 	}
 
-	// Periodic re-discovery
+	// Let peers know about this machine, in case it joined through another
+	// member or its address changed. Give the listener a moment first.
+	if cfg.Token != "" {
+		go func() {
+			time.Sleep(time.Second)
+			announceSelf(book.Peers(), cfg.Token, cfg.DeviceName, cfg.Port)
+		}()
+	}
+
 	if cfg.AutoDiscover && !*noDiscover {
-		configFilePath := *configPath
-		if configFilePath == "" {
-			configFilePath = ConfigPath()
-		}
 		go func() {
 			ticker := time.NewTicker(60 * time.Second)
 			defer ticker.Stop()
@@ -218,24 +241,16 @@ func cmdDaemon(args []string) error {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					discovered, err := DiscoverPeers(cfg.Port, cfg.Token, 3*time.Second)
-					if err != nil {
-						continue
-					}
-					newPeers := MergePeerLists(cfg.Peers, discovered)
-					if len(newPeers) != len(cfg.Peers) {
-						cfg.Peers = newPeers
-						if err := SaveConfig(configFilePath, cfg); err != nil {
-							log.Printf("warning: failed to save config: %v", err)
-						} else {
-							log.Printf("saved %d peer(s) to config", len(cfg.Peers))
-						}
-					}
-					engine.SetPeers(newPeers)
+					discover()
 				}
 			}
 		}()
 	}
+
+	if err := writePIDFile(); err != nil {
+		log.Printf("warning: %v", err)
+	}
+	defer removePIDFile()
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("server: %w", err)
@@ -331,16 +346,12 @@ func cmdStatus(args []string) error {
 			allOK = false
 			continue
 		}
-		var health struct {
-			Service string `json:"service"`
-			Device  string `json:"device"`
-			Version string `json:"version"`
-		}
+		var health healthInfo
 		json.NewDecoder(io.LimitReader(resp.Body, 1024)).Decode(&health)
 		resp.Body.Close()
 		switch {
-		case resp.StatusCode == http.StatusUnauthorized:
-			fmt.Printf("  %s  token mismatch (401): both machines need the same token\n", peer)
+		case resp.StatusCode == http.StatusUnauthorized || (health.Service == "clipsync" && !health.Authorized):
+			fmt.Printf("  %s  token mismatch: both machines need the same token\n", peer)
 			allOK = false
 		case resp.StatusCode != http.StatusOK:
 			fmt.Printf("  %s  error %d\n", peer, resp.StatusCode)

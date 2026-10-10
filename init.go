@@ -60,6 +60,7 @@ func cmdInit(args []string) error {
 	genToken := fs.Bool("new-token", false, "generate a new random token and print it")
 	device := fs.String("device", "", "device name shown in logs (default: hostname)")
 	port := fs.Int("port", 0, "listen port (default 8275)")
+	bind := fs.String("bind", "", "listen address (default: this machine's Tailscale IP)")
 	discover := fs.Bool("discover", false, "also auto-discover clipsync peers on the tailnet (always on when no --peer is given)")
 	var peers peerList
 	fs.Var(&peers, "peer", "peer address host[:port], repeatable or comma-separated; replaces the existing peer list")
@@ -84,6 +85,9 @@ func cmdInit(args []string) error {
 	if *port > 0 {
 		cfg.Port = *port
 	}
+	if *bind != "" {
+		cfg.Bind = *bind
+	}
 
 	if *token == "" {
 		*token = os.Getenv("CLIPSYNC_TOKEN")
@@ -104,9 +108,7 @@ func cmdInit(args []string) error {
 	if *device != "" {
 		cfg.DeviceName = *device
 	} else if cfg.DeviceName == "" {
-		if h, err := os.Hostname(); err == nil {
-			cfg.DeviceName = strings.ToLower(strings.TrimSuffix(h, ".local"))
-		}
+		cfg.DeviceName = defaultDeviceName()
 	}
 
 	if len(peers) > 0 {

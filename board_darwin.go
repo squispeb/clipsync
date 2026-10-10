@@ -100,6 +100,10 @@ func NewBoard() (Board, error) {
 	return &DarwinBoard{}, nil
 }
 
+func boardRequirement() (desc string, ok bool, hint string) {
+	return "macOS pasteboard", true, ""
+}
+
 func takeBytes(p unsafe.Pointer, n C.int) []byte {
 	if p == nil {
 		return nil

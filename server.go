@@ -25,6 +25,11 @@ type Server struct {
 	onReceive func(data []byte, contentType string)
 	mux       *http.ServeMux
 	httpSrv   *http.Server
+
+	// Set by EnablePeers; nil in tests that only exercise /clip.
+	peers *PeerBook
+	self  string
+	pair  pairWindow
 }
 
 func NewServer(board Board, bind string, port int, maxSize int64, token string, version string, history *History, device string, onReceive func(data []byte, contentType string)) *Server {
@@ -159,22 +164,22 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleHealth identifies this daemon as clipsync for status checks and
-// discovery. With a token configured it requires the token too, so discovery
-// only picks up peers that share it.
+// handleHealth identifies this daemon as clipsync to anyone on the tailnet,
+// so setup can list joinable machines. "authorized" tells the caller whether
+// its token matches; the device name is only shared with token holders.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	if !s.authorized(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
+	authorized := s.authorized(r)
+	resp := map[string]any{
+		"status":     "ok",
+		"service":    "clipsync",
+		"version":    s.version,
+		"authorized": authorized,
+		"time":       time.Now().Format(time.RFC3339),
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "ok",
-		"service": "clipsync",
-		"version": s.version,
-		"device":  s.device,
-		"time":    time.Now().Format(time.RFC3339),
-	})
+	if authorized {
+		resp["device"] = s.device
+	}
+	writeJSON(w, resp)
 }
 
 func (s *Server) authorized(r *http.Request) bool {

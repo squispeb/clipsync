@@ -185,21 +185,25 @@ func TestHandleHealth(t *testing.T) {
 	}
 }
 
-func TestHandleHealth_RequiresToken(t *testing.T) {
-	srv := NewServer(&MockBoard{}, "127.0.0.1", 8275, 1024, "secret", "", nil, "", nil)
+func TestHandleHealth_ReportsAuthorization(t *testing.T) {
+	srv := NewServer(&MockBoard{}, "127.0.0.1", 8275, 1024, "secret", "", nil, "box", nil)
 
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/health", nil))
-	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("without token: status = %d, want %d", rr.Code, http.StatusUnauthorized)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("without token: status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `"authorized":false`) || strings.Contains(body, "box") {
+		t.Errorf("without token: body = %s, want authorized false and no device name", body)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	req.Header.Set("X-ClipSync-Token", "secret")
 	rr = httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("with token: status = %d, want %d", rr.Code, http.StatusOK)
+	if body := rr.Body.String(); !strings.Contains(body, `"authorized":true`) || !strings.Contains(body, `"device":"box"`) {
+		t.Errorf("with token: body = %s, want authorized true and the device name", body)
 	}
 }
 

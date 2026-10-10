@@ -1,47 +1,18 @@
-.PHONY: build build-mac build-mac-native build-linux build-windows build-windows-portable test clean
+.PHONY: build test snapshot clean
 
-VERSION := 0.5.0
-BINARY  := clipsync
-
-# macOS SDK path for CGO (required on modern macOS where headers moved into the SDK)
-ifeq ($(shell uname -s),Darwin)
-	SDK_PATH := $(shell xcrun --show-sdk-path 2>/dev/null)
-	export CGO_CFLAGS := -isysroot $(SDK_PATH)
-	export CGO_LDFLAGS := -isysroot $(SDK_PATH)
-endif
-
-# NOTE: macOS binaries MUST be built natively on macOS because
-# golang.design/x/clipboard requires CGO on Darwin.
-# Cross-compiling from Linux produces a broken binary.
-build: build-mac-native build-linux build-windows build-windows-portable
-
-# Cross-compiled macOS binaries (BROKEN — no CGO support)
-# Only use for testing non-clipboard code.
-build-mac-cross:
+# Local build for this machine. Releases are built by GoReleaser
+# (.goreleaser.yaml) in .github/workflows/release.yml.
+# macOS needs cgo (AppKit); Linux and Windows are pure Go.
+build:
 	@mkdir -p dist
-	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=$(VERSION)" -o dist/$(BINARY)-mac-arm64 .
-	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=$(VERSION)" -o dist/$(BINARY)-mac-amd64 .
-
-# Build macOS binaries natively (requires macOS + Xcode CLI tools)
-build-mac-native:
-	@mkdir -p dist
-	go build -ldflags="-s -w -X main.version=$(VERSION)" -o dist/$(BINARY)-mac-$(shell uname -m) .
-
-build-linux:
-	@mkdir -p dist
-	GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.version=$(VERSION)" -o dist/$(BINARY)-linux-amd64 .
-	GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X main.version=$(VERSION)" -o dist/$(BINARY)-linux-arm64 .
-
-build-windows:
-	@mkdir -p dist
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=$(VERSION)" -o dist/$(BINARY)-windows-amd64.exe .
-
-build-windows-portable: build-windows
-	@mkdir -p dist
-	cd dist && zip -j $(BINARY)-windows-portable.zip $(BINARY)-windows-amd64.exe >/dev/null
+	go build -ldflags="-s -w" -o dist/clipsync .
 
 test:
-	go test -v ./...
+	go test -race ./...
+
+# Full release dry run (macOS only, since the macOS binaries need cgo).
+snapshot:
+	goreleaser release --snapshot --clean --skip=publish
 
 clean:
 	rm -rf dist/

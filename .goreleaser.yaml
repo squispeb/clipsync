@@ -1,0 +1,99 @@
+# Release pipeline, run by .github/workflows/release.yml on a v* tag.
+# Everything builds on one macOS runner: the macOS binaries need cgo (AppKit)
+# and Apple's clang builds both architectures; Linux and Windows are pure Go.
+version: 2
+project_name: clipsync
+
+builds:
+  - id: clipsync
+    binary: clipsync
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    env:
+      - CGO_ENABLED=0
+    overrides:
+      - goos: darwin
+        goarch: amd64
+        env: [CGO_ENABLED=1]
+      - goos: darwin
+        goarch: arm64
+        env: [CGO_ENABLED=1]
+
+archives:
+  # mise's github backend and the Homebrew cask pick assets by these names.
+  - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [README.md, LICENSE]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+
+release:
+  github:
+    owner: squispeb
+    name: clipsync
+
+homebrew_casks:
+  - name: clipsync
+    repository:
+      owner: squispeb
+      name: homebrew-tap
+      git:
+        url: git@github.com:squispeb/homebrew-tap.git
+        private_key: "{{ .Env.HOMEBREW_TAP_DEPLOY_KEY }}"
+    directory: Casks
+    homepage: https://github.com/squispeb/clipsync
+    description: Clipboard sync between your machines over Tailscale
+    license: MIT
+    commit_author:
+      name: clipsync-release
+      email: noreply@github.com
+    caveats: |
+      Connect this machine to your others with:
+        clipsync setup
+    hooks:
+      post:
+        # The binary isn't notarized; without this Gatekeeper blocks it.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/clipsync"]
+          end
+    zap:
+      launchctl:
+        - com.clipsync.daemon
+      trash:
+        - ~/Library/LaunchAgents/com.clipsync.daemon.plist
+        - ~/Library/Logs/clipsync.log
+        - ~/Library/Application Support/clipsync
+
+winget:
+  - name: clipsync
+    package_name: ClipSync
+    package_identifier: Squispeb.ClipSync
+    publisher: Squispeb
+    publisher_url: https://github.com/squispeb
+    publisher_support_url: https://github.com/squispeb/clipsync/issues
+    homepage: https://github.com/squispeb/clipsync
+    short_description: Clipboard sync between your machines over Tailscale
+    description: Copy on one machine, paste on another. ClipSync syncs text and images between your computers directly over Tailscale, with no cloud service.
+    license: MIT
+    license_url: https://github.com/squispeb/clipsync/blob/master/LICENSE
+    installation_notes: Run `clipsync setup` to connect this machine to your others.
+    release_notes: "{{ .Changelog }}"
+    release_notes_url: https://github.com/squispeb/clipsync/releases/tag/{{ .Tag }}
+    tags: [clipboard, tailscale, sync, cli]
+    # Manifests land in dist/ and are attached to the release; submitting to
+    # microsoft/winget-pkgs is a separate PR (see AGENTS.md).
+    skip_upload: true
+    repository:
+      owner: squispeb
+      name: winget-pkgs

@@ -33,7 +33,11 @@ type tailscaleStatus struct {
 // each one on the given port to see if a clipsync daemon is listening.
 // It returns a deduplicated list of reachable peer addresses.
 func DiscoverPeers(port int, token string, timeout time.Duration) ([]string, error) {
-	cmd := exec.Command("tailscale", "status", "--json")
+	cli := tailscaleCLI()
+	if cli == "" {
+		return nil, fmt.Errorf("tailscale CLI not found")
+	}
+	cmd := exec.Command(cli, "status", "--json")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("tailscale status failed (is tailscale installed and running?): %w", err)
@@ -105,9 +109,17 @@ func DiscoverPeers(port int, token string, timeout time.Duration) ([]string, err
 	return peers, nil
 }
 
-// isClipSyncPeer accepts only a /health reply that identifies itself as
-// clipsync. Anything else on the port (another web server answering "ok")
-// would otherwise receive every clipboard copy.
+type healthInfo struct {
+	Status     string `json:"status"`
+	Service    string `json:"service"`
+	Version    string `json:"version"`
+	Device     string `json:"device"`
+	Authorized bool   `json:"authorized"`
+}
+
+// isClipSyncPeer accepts only a clipsync daemon that accepts our token.
+// Anything else on the port (another web server answering "ok") would
+// otherwise receive every clipboard copy.
 func isClipSyncPeer(client *http.Client, addr, token string) bool {
 	url := fmt.Sprintf("http://%s/health", addr)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -127,14 +139,11 @@ func isClipSyncPeer(client *http.Client, addr, token string) bool {
 		return false
 	}
 
-	var health struct {
-		Status  string `json:"status"`
-		Service string `json:"service"`
-	}
+	var health healthInfo
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1024)).Decode(&health); err != nil {
 		return false
 	}
-	return health.Status == "ok" && health.Service == "clipsync"
+	return health.Service == "clipsync" && health.Authorized
 }
 
 // EnsureConfig creates a default config file if it doesn't exist.

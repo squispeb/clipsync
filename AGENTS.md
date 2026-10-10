@@ -1,114 +1,98 @@
 # AGENTS.md
 
-Instructions for AI agents installing, configuring or working on ClipSync. Human-facing docs are in [README.md](README.md); this file is the exact procedure.
+Instructions for AI agents installing ClipSync for a user, or working on its code. User-facing docs are in [README.md](README.md).
 
 ## Ground rules
 
-- **The token is a secret.** Move it between machines in a shell variable or environment variable (`CLIPSYNC_TOKEN`). Never commit it, never paste it into issues, PRs or chat, and don't echo it into logs.
-- **Never run without a token.** Without one, any device on the tailnet can read and replace the clipboard.
-- **Everything is per-user, with no sudo**, except installing OS packages. Ask the user before installing packages.
-- **Back up and restore the user's clipboard** around any functional test. The test overwrites it on every machine.
-- Use the setup scripts rather than hand-written steps. They're idempotent, so re-run them to repair or update.
+- **Use the package manager and `clipsync setup`.** Don't hand-write service files or configs, and don't build from source just to install.
+- **Treat the group token as a secret.** Never print it, commit it, or paste it into chat, issues or PRs. Prefer pairing codes. If you must move the token, use the `CLIPSYNC_TOKEN` environment variable.
+- **No sudo.** Everything is per-user. The only exception is installing the Linux clipboard tool (`wl-clipboard` or `xclip`) with the system package manager; ask the user first.
+- **Ask before installing a package manager** (Homebrew, mise) the user doesn't already have.
+- **Back up and restore the user's clipboard** around any functional test, because the test overwrites it on every machine. If the user starts copying things during the test, stop testing and leave their clipboard alone.
 
 ## Install on a set of machines
 
-Machines are referred to as **A** (the first) and **B, C, …** (the others). Repeat the B steps for each other machine.
+Call the first machine **A** and the others **B, C, …**
 
-### 0. Preflight (every machine)
+### 1. Preflight (each machine)
 
-1. Identify the OS: Linux (`uname -s` = `Linux`), macOS (`Darwin`), or Windows.
-2. Tailscale must be logged in on every machine with the same account. Record each machine's IPv4: `tailscale ip -4`. On macOS the CLI may be missing; use `ifconfig | grep 'inet 100\.'` instead.
-3. Check the prerequisites in the README's *Requirements* table.
-   - Linux: `go version` (1.24+), `cc --version`, `/usr/include/X11/Xlib.h`, and on Wayland `wl-copy`/`wl-paste`. If `go` is missing but `mise` exists, the script uses `mise exec go@1.24`.
-   - macOS: `go version` (Homebrew installs it at `/opt/homebrew/bin/go`) and `xcode-select -p`.
-   - Windows: nothing is required. Without Go, the script downloads the latest release.
-4. Get the code: `git clone https://github.com/squispeb/clipsync.git`, or `git pull` in an existing checkout.
+- **Tailscale.** It must be logged in with the same account on every machine. `tailscale ip -4` prints the address; on macOS without the CLI, use `/Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4`.
+- **Linux clipboard tool.** If `WAYLAND_DISPLAY` is set in the user's session, it needs `wl-clipboard`; on X11 it needs `xclip`. `clipsync setup` checks for it.
 
-### 1. Machine A
+### 2. Install the binary (each machine)
 
-Run the script for A's OS from the repo root, without `CLIPSYNC_TOKEN`:
+Use the first option that applies:
 
-| OS | Command |
+| Situation | Command |
 |---|---|
-| Linux | `./scripts/setup-linux.sh` |
-| macOS | `./scripts/setup-mac.sh` |
-| Windows | `powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows.ps1` |
+| Homebrew installed (macOS/Linux) | `brew install --cask squispeb/tap/clipsync` |
+| mise installed (any OS) | `mise use -g github:squispeb/clipsync` |
+| Windows with winget, once the package is in the catalog | `winget install Squispeb.ClipSync` |
+| Otherwise | Download the archive for the OS and arch from the latest release, check it against `checksums.txt`, and put `clipsync` on `PATH` |
 
-If A has no config yet, this generates a token and prints it. If a config already exists, it's kept.
+Check it with `clipsync version`. Every machine should report the same version.
 
-Read the token into a variable without displaying it:
-
-```bash
-TOKEN=$(~/.local/bin/clipsync token)               # on A, or: TOKEN=$(ssh A '~/.local/bin/clipsync token')
-```
-
-On Windows the binary is `%LOCALAPPDATA%\ClipSync\clipsync.exe`.
-
-### 2. Machines B, C, …
+### 3. Machine A
 
 ```bash
-CLIPSYNC_TOKEN="$TOKEN" CLIPSYNC_PEERS="<A-ip>" ./scripts/setup-linux.sh   # or setup-mac.sh
-```
-```powershell
-$env:CLIPSYNC_TOKEN = "<token>"; $env:CLIPSYNC_PEERS = "<A-ip>"
-powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows.ps1
+clipsync setup --new-group --yes
 ```
 
-`CLIPSYNC_PEERS` is a comma-separated list of every machine *this* machine should send to. With three or more machines, list all the others.
+If A already has a group (`clipsync status` lists peers), keep it: run `clipsync setup --yes`, which keeps the existing group.
 
-### 3. Back on A: add the peers
+### 4. Machines B, C, … (one at a time)
+
+1. On A, run `clipsync pair` in the background and read the 6-digit code from its output. It's valid for 2 minutes, and `pair` exits once someone joins.
+2. On the new machine:
+   ```bash
+   clipsync setup --join <A's Tailscale IP or MagicDNS name> --code <code> --yes
+   ```
+3. The new machine announces itself to every member, so A and the others learn about it automatically.
+
+If you can't run `pair` on A but can read A's token (for example over SSH), you can use the token instead:
 
 ```bash
-CLIPSYNC_PEERS="<B-ip>,<C-ip>" ./scripts/setup-linux.sh   # token unchanged; peer list replaced
+CLIPSYNC_TOKEN="$(ssh A clipsync token)" clipsync setup --join A --yes
 ```
 
-### 4. Verify (every machine)
+### 5. Verify (each machine)
 
-1. Run `clipsync status`. Every peer must show `ok: <name>, v<same version>`.
-   - `token mismatch (401)`: re-run step 2 on that machine with the right token.
-   - `unreachable`: check the peer's daemon and `tailscale ping <ip>`.
-2. The log must show `clipboard backend: wayland` (Linux on Wayland), `listening on 100.x.y.z:8275`, and `sync engine started (N peers, watching for changes)`.
-   - Linux: `journalctl --user -u clipsync -n 20`
-   - macOS: `tail ~/Library/Logs/clipsync.log`
-   - Windows: `Get-Content $env:LOCALAPPDATA\ClipSync\clipsync.log -Tail 20`
+1. `clipsync status` must list every other machine as `ok: <name>, v<same version>`.
+2. `clipsync service status` must say running.
+   - Linux: also check that `journalctl --user -u clipsync -n 20` shows `clipboard backend: wayland` or `x11`.
+   - macOS: check the same in `~/Library/Logs/clipsync.log`.
+   - Windows: check the same in `%LOCALAPPDATA%\ClipSync\clipsync.log`.
 3. Functional test, with each clipboard backed up first:
-   - Copy a unique marker on A, then read it on B, and the other way round.
-   - Linux: `wl-paste -n` / `wl-copy`
+   - Copy a unique marker on A and read it on B, then the other way round.
+   - Linux: `wl-paste -n` / `wl-copy` (`xclip` on X11)
    - macOS: `pbpaste` / `pbcopy`
    - Windows: `Get-Clipboard` / `Set-Clipboard`
-   - Each side's log shows `clipboard changed` and then `received remote clipboard`.
    - Restore the backups afterwards.
-   - If the user starts copying things during the test, stop and leave their clipboard alone.
 
-### 5. Report
+### 6. Report
 
-Report each machine's OS, address, version and `status` result. Report the backend line from each log. Say whether the functional test passed in each direction. List anything you skipped.
+Report each machine's OS, install method, version and `status` output. Say whether the functional test passed in each direction. List anything you skipped and why.
 
-## Doing this over SSH
+## Doing it over SSH
 
 - **macOS:**
-  - Non-login shells lack `/opt/homebrew/bin`. The setup script adds it.
-  - Run `pbcopy` as `LANG=en_US.UTF-8 pbcopy`, or non-ASCII text gets mangled before clipsync sees it.
-  - `screencapture` doesn't work over SSH (no screen-recording permission). To test images, copy a PNG over and run `osascript -e 'set the clipboard to (read (POSIX file "/tmp/x.png") as «class PNGf»)'`.
-- **Linux:** the SSH environment has no `WAYLAND_DISPLAY`. That's fine: the script checks the systemd user manager's environment, which is what the service uses. It needs the user to be logged in to a graphical session.
-- **Windows:** processes started from an OpenSSH session don't run on the user's desktop, so a daemon started there can't reach their clipboard. Over SSH, run the script for install and config only. Then have the user sign out and back in (the Startup shortcut starts the daemon on their desktop), or run the script from a terminal on the desktop.
-
-## Platform notes
-
-- **Linux on Wayland** uses `wl-clipboard`. The X11 library can't see the Wayland clipboard from a background process. If the log says `clipboard backend: x11` on a Wayland session, install `wl-clipboard` and re-run the script.
-- **Linux service:** the systemd unit is `WantedBy=graphical-session.target`. If the script warns that the target is inactive, the session doesn't use a session manager (uwsm, GNOME, KDE). In that case add `exec-once = ~/.local/bin/clipsync daemon` (Hyprland) or the equivalent to the compositor's autostart, and tell the user.
-- **macOS** must be built on the Mac (cgo with AppKit), and must run as a per-user LaunchAgent. Never install it in `/Library/LaunchDaemons`.
-- **Windows:** the daemon listens on the Tailscale IP. Windows may ask once whether to allow it on the network; the user must allow private networks.
+  - Non-login shells don't have `/opt/homebrew/bin` on `PATH`. Call `/opt/homebrew/bin/brew` and `/opt/homebrew/bin/clipsync` directly.
+  - Run `pbcopy` as `LANG=en_US.UTF-8 pbcopy`, or non-ASCII text gets mangled.
+  - `screencapture` doesn't work over SSH. To test images, set a PNG with `osascript -e 'set the clipboard to (read (POSIX file "/tmp/x.png") as «class PNGf»)'`.
+- **Linux:**
+  - The SSH environment has no `WAYLAND_DISPLAY`, so `clipsync setup`'s clipboard check fails there. Run setup in the user's desktop session instead, or pass the session's variables, e.g. `WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/$(id -u) clipsync setup ...`.
+  - The service itself takes its environment from the systemd user session.
+- **Windows:** a daemon started from an OpenSSH session runs outside the user's desktop and can't reach their clipboard. Over SSH, `clipsync setup` can install and configure, but the daemon only works after the user signs out and back in, when the Run entry starts it on their desktop. Alternatively, run setup from a terminal on the desktop.
 
 ## Working on the code
 
-- Run tests with `go test -race ./...`. On Linux without a system Go, use `mise exec go@1.24 -- go test -race ./...`. Also vet the other platforms: `GOOS=windows CGO_ENABLED=0 go vet ./...`.
-- Clipboard backends implement `Board` (`board.go`):
+- Test with `go test -race ./...`. CI (`.github/workflows/ci.yml`) also runs the xclip backend under Xvfb, a macOS cross-build, and a Windows service smoke test.
+- The clipboard backends implement `Board` (`board.go`):
   - `board_wayland_linux.go` (wl-clipboard)
-  - `board_darwin.go` (NSPasteboard via cgo)
-  - `board_system.go` (golang.design/x/clipboard, for X11 and Windows)
+  - `board_x11_linux.go` (xclip)
+  - `board_darwin.go` (NSPasteboard via cgo; macOS is the only cgo build)
+  - `board_system_windows.go`
   - `NewBoard` in `board_select_*.go` picks one.
-- Optional interfaces: `Watcher` (event-driven sync instead of polling) and `SensitiveChecker` (skip password-manager copies).
-- macOS code can only be compiled on a Mac. If you can reach one, build and test there before committing changes to `board_darwin.go`.
-- The version is `version` in `main.go`, also `VERSION` in the `Makefile` and the winget manifests. Bump them together.
-- Don't commit binaries: `dist/` and `/clipsync` are ignored.
+- The service code is in `service_{linux,darwin,windows}.go`. Pairing, `/peers` and announcements are in `pair.go`, and the peer list is persisted through `peerbook.go`.
+- macOS code only compiles on a Mac. Run `make snapshot` on a Mac (with goreleaser) before changing the release config.
+- Releases come from a `v*` tag; see [docs/releasing.md](docs/releasing.md). Don't commit binaries.

@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install X11 test tools
+        run: sudo apt-get update && sudo apt-get install -y xvfb xclip
+      - run: CGO_ENABLED=0 go vet ./...
+      - run: go test -race ./...
+      # Exercise the xclip backend against a real (virtual) X server.
+      - run: CLIPSYNC_X11_TEST=1 xvfb-run -a go test -run TestXClip -v ./...
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race ./...
+      - name: Cross-build Intel binary
+        run: GOARCH=amd64 CGO_ENABLED=1 go build -o /dev/null .
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Service smoke test (install, start at login, run, uninstall)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          go build -o "$env:RUNNER_TEMP\clipsync.exe" .
+          $cs = "$env:RUNNER_TEMP\clipsync.exe"
+          & $cs init --new-token --bind 127.0.0.1
+          & $cs service install
+          if ($LASTEXITCODE) { throw "service install failed" }
+          & $cs service status
+          $run = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name ClipSync
+          Write-Host "Run entry: $($run.ClipSync)"
+          $token = & $cs token
+          $health = Invoke-RestMethod -Uri http://127.0.0.1:8275/health -Headers @{ "X-ClipSync-Token" = $token }
+          if (-not $health.authorized) { throw "daemon not answering with the token" }
+          Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8275/clip -Headers @{ "X-ClipSync-Token" = $token } -ContentType "text/plain; charset=utf-8" -Body "clipsync-ci"
+          Start-Sleep -Seconds 1
+          Write-Host "clipboard now: $(Get-Clipboard)"
+          & $cs service uninstall
+          if (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name ClipSync -ErrorAction SilentlyContinue) { throw "Run entry not removed" }
+          Get-Content "$env:LOCALAPPDATA\ClipSync\clipsync.log"
