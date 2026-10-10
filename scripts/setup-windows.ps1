@@ -1,123 +1,110 @@
 # ============================================================
-# ClipSync Windows Setup Script
-# Run in PowerShell (Admin NOT required)
+# ClipSync Windows setup (PowerShell, no admin needed)
+#
+# Installs %LOCALAPPDATA%\ClipSync\clipsync.exe (built from this checkout
+# when Go is installed, otherwise downloaded from the latest GitHub release),
+# writes the config, and starts the daemon hidden at every login.
+#
+#   .\scripts\setup-windows.ps1                    # first machine: makes a token
+#   $env:CLIPSYNC_TOKEN = "..."; $env:CLIPSYNC_PEERS = "100.x.y.z"; .\scripts\setup-windows.ps1
+#
+# CLIPSYNC_TOKEN  shared token (every machine needs the same one)
+# CLIPSYNC_PEERS  comma-separated peer Tailscale IPs or hostnames, [:port]
+#
+# Without either variable an existing config is kept; with no config a new
+# token is generated and printed.
 # ============================================================
 
 $ErrorActionPreference = "Stop"
 
-# --- Config ---
-$CLIPSYNC_DIR   = "$env:LOCALAPPDATA\clipsync"
-$CLIPSYNC_EXE   = "$CLIPSYNC_DIR\clipsync.exe"
-$CONFIG_DIR     = "$env:APPDATA\clipsync"
-$CONFIG_FILE    = "$CONFIG_DIR\config.json"
-$STARTUP_DIR    = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
-$VERSION        = "0.4.0"
-$DOWNLOAD_URL   = "https://github.com/squispeb/clipsync/releases/download/v$VERSION/clipsync-windows-amd64.exe"
+$InstallDir  = Join-Path $env:LOCALAPPDATA "ClipSync"
+$Exe         = Join-Path $InstallDir "clipsync.exe"
+$LogFile     = Join-Path $InstallDir "clipsync.log"
+$ConfigFile  = Join-Path $env:APPDATA "clipsync\config.json"
+$StartupDir  = [Environment]::GetFolderPath("Startup")
+$Shortcut    = Join-Path $StartupDir "ClipSync.lnk"
+$RepoRoot    = Split-Path -Parent $PSScriptRoot
+$DownloadUrl = "https://github.com/squispeb/clipsync/releases/latest/download/clipsync-windows-amd64.exe"
 
-# --- Step 1: Download and install ---
-Write-Host "`n[1/3] Installing ClipSync v$VERSION..." -ForegroundColor Cyan
+function Warn($msg) { Write-Host "  warning: $msg" -ForegroundColor Yellow }
 
-New-Item -ItemType Directory -Path $CLIPSYNC_DIR -Force | Out-Null
-
-# Check if binary already exists in common locations
-$sources = @(
-    "$env:USERPROFILE\Downloads\clipsync-windows-amd64.exe",
-    "$env:USERPROFILE\Desktop\clipsync-windows-amd64.exe",
-    "$env:USERPROFILE\Downloads\Taildrop\clipsync-windows-amd64.exe"
-)
-
-$found = $false
-foreach ($src in $sources) {
-    if (Test-Path $src) {
-        Copy-Item $src $CLIPSYNC_EXE -Force
-        Write-Host "  Installed from: $src" -ForegroundColor Green
-        $found = $true
-        break
-    }
+Write-Host "[1/5] Checking prerequisites..." -ForegroundColor Cyan
+$tailscale = Get-Command tailscale -ErrorAction SilentlyContinue
+if (-not $tailscale) {
+    Warn "tailscale CLI not found; install Tailscale (https://tailscale.com/download/windows)"
+} else {
+    & tailscale ip -4 *> $null
+    if ($LASTEXITCODE -ne 0) { Warn "Tailscale is not connected; the daemon will wait for it" }
 }
 
-# If not found locally, download from GitHub
-if (-not $found) {
-    Write-Host "  Downloading from GitHub..." -ForegroundColor Yellow
+Write-Host "[2/5] Installing binary..." -ForegroundColor Cyan
+New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+# A running daemon locks the exe.
+Get-Process clipsync -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Milliseconds 500
+
+$go = Get-Command go -ErrorAction SilentlyContinue
+if ($go -and (Test-Path (Join-Path $RepoRoot "go.mod"))) {
+    Write-Host "  building from $RepoRoot"
+    Push-Location $RepoRoot
     try {
-        Invoke-WebRequest -Uri $DOWNLOAD_URL -OutFile $CLIPSYNC_EXE -UseBasicParsing
-        Write-Host "  Downloaded to: $CLIPSYNC_EXE" -ForegroundColor Green
-    } catch {
-        Write-Host "  Download failed: $_" -ForegroundColor Red
-        Write-Host "  Please download manually from:" -ForegroundColor Yellow
-        Write-Host "  https://github.com/squispeb/clipsync/releases" -ForegroundColor Yellow
-        exit 1
+        $env:CGO_ENABLED = "0"
+        & go build -ldflags "-s -w" -o $Exe .
+        if ($LASTEXITCODE -ne 0) { throw "go build failed" }
+    } finally {
+        Pop-Location
     }
-}
-
-# Verify
-$ver = & $CLIPSYNC_EXE version 2>&1
-Write-Host "  $ver" -ForegroundColor Green
-
-# --- Step 2: Create config ---
-Write-Host "`n[2/3] Creating default config..." -ForegroundColor Cyan
-
-New-Item -ItemType Directory -Path $CONFIG_DIR -Force | Out-Null
-
-if (-not (Test-Path $CONFIG_FILE)) {
-    $config = @"
-{
-  "device_name": "$env:COMPUTERNAME",
-  "peers": [],
-  "bind": "",
-  "port": 8275,
-  "max_size": 10485760,
-  "sync_interval_ms": 500,
-  "token": "",
-  "auto_discover": true,
-  "history_max_items": 100,
-  "history_max_memory_mb": 50
-}
-"@
-    [System.IO.File]::WriteAllText($CONFIG_FILE, $config, [System.Text.UTF8Encoding]::new($false))
-    Write-Host "  Config: $CONFIG_FILE" -ForegroundColor Green
 } else {
-    Write-Host "  Config already exists: $CONFIG_FILE" -ForegroundColor Yellow
+    Write-Host "  Go not found; downloading the latest release"
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $Exe -UseBasicParsing
+}
+Write-Host "  installed $(& $Exe version) -> $Exe" -ForegroundColor Green
+
+# Put clipsync on the user PATH for new terminals.
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if (-not (($userPath -split ";") -contains $InstallDir)) {
+    [Environment]::SetEnvironmentVariable("Path", ($userPath.TrimEnd(";") + ";" + $InstallDir), "User")
+    Write-Host "  added $InstallDir to your PATH (open a new terminal to use it)"
 }
 
-# --- Step 3: Auto-start setup ---
-Write-Host "`n[3/3] Setting up auto-start..." -ForegroundColor Cyan
-
-# Create a simple batch file for startup
-$batchContent = @"
-@echo off
-start /min "" "$CLIPSYNC_EXE" daemon
-""@
-$batchPath = "$STARTUP_DIR\clipsync-startup.bat"
-$batchContent | Out-File -Encoding ascii $batchPath
-Write-Host "  Startup script: $batchPath" -ForegroundColor Green
-
-# Start daemon now
-Write-Host "  Starting daemon..." -ForegroundColor Cyan
-Start-Process -FilePath $CLIPSYNC_EXE -ArgumentList "daemon" -WindowStyle Hidden
-Start-Sleep -Seconds 2
-
-# Verify daemon is running
-$proc = Get-Process -Name "clipsync" -ErrorAction SilentlyContinue
-if ($proc) {
-    Write-Host "  Daemon running (PID: $($proc.Id))" -ForegroundColor Green
+Write-Host "[3/5] Configuring..." -ForegroundColor Cyan
+if ($env:CLIPSYNC_TOKEN -or $env:CLIPSYNC_PEERS) {
+    $initArgs = @("init")
+    if ($env:CLIPSYNC_PEERS) {
+        foreach ($p in ($env:CLIPSYNC_PEERS -split ",")) {
+            $p = $p.Trim()
+            if ($p) { $initArgs += @("--peer", $p) }
+        }
+    }
+    & $Exe @initArgs   # reads CLIPSYNC_TOKEN itself
+} elseif (Test-Path $ConfigFile) {
+    Write-Host "  keeping $ConfigFile (set CLIPSYNC_TOKEN / CLIPSYNC_PEERS to change it)"
 } else {
-    Write-Host "  Warning: daemon may not have started" -ForegroundColor Yellow
+    & $Exe init --new-token
 }
+if ($LASTEXITCODE -ne 0) { throw "clipsync init failed" }
 
-# --- Done ---
-Write-Host "`n============================================" -ForegroundColor Cyan
-Write-Host "  ClipSync setup complete!" -ForegroundColor Green
-Write-Host "============================================" -ForegroundColor Cyan
+Write-Host "[4/5] Starting at login..." -ForegroundColor Cyan
+# Remove the batch file used by older versions of this script.
+Remove-Item (Join-Path $StartupDir "clipsync-startup.bat") -ErrorAction SilentlyContinue
+$daemonArgs = "daemon --log-file `"$LogFile`""
+$shell = New-Object -ComObject WScript.Shell
+$lnk = $shell.CreateShortcut($Shortcut)
+$lnk.TargetPath = $Exe
+$lnk.Arguments = $daemonArgs
+$lnk.WorkingDirectory = $InstallDir
+$lnk.WindowStyle = 7   # minimized
+$lnk.Save()
+Write-Host "  $Shortcut"
+
+Write-Host "[5/5] Starting and verifying..." -ForegroundColor Cyan
+Start-Process -FilePath $Exe -ArgumentList $daemonArgs -WindowStyle Hidden
+Start-Sleep -Seconds 3
+if (-not (Get-Process clipsync -ErrorAction SilentlyContinue)) {
+    throw "daemon exited; see $LogFile"
+}
+Get-Content $LogFile -Tail 5 | ForEach-Object { "  $_" }
 Write-Host ""
-Write-Host "  Binary:  $CLIPSYNC_EXE"
-Write-Host "  Config:  $CONFIG_FILE"
-Write-Host "  Daemon:  Running (auto-starts on login)"
-Write-Host ""
-Write-Host "  Commands:"
-Write-Host "    clipsync status     - Check peer connectivity"
-Write-Host "    clipsync history    - View clipboard history"
-Write-Host "    clipsync peers      - List configured peers"
-Write-Host ""
-Write-Host "  Note: Ensure Tailscale is running on all devices."
-Write-Host ""
+Write-Host "If Windows asks whether clipsync may accept connections, allow it on private networks." -ForegroundColor Yellow
+& $Exe status
+if ($LASTEXITCODE -ne 0) { Warn "some peers are unreachable (fine until clipsync is set up on them)" }

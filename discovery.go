@@ -155,7 +155,7 @@ func EnsureConfig(path string) error {
 		return fmt.Errorf("marshal default config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("write default config: %w", err)
 	}
 	log.Printf("created default config at %s", path)

@@ -1,4 +1,4 @@
-module clipsync
+module github.com/squispeb/clipsync
 
 go 1.24
 

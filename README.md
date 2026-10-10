@@ -2,13 +2,13 @@
 
 Automatic cross-platform clipboard synchronization over [Tailscale](https://tailscale.com).
 
-Copy on one machine, paste on another — no hotkeys, no cloud, no accounts, **no manual config needed**. Clipboard data travels directly between your devices through Tailscale's encrypted WireGuard tunnel.
+Copy on one machine, paste on another — no hotkeys, no cloud, no accounts, **one setup command per machine**. Clipboard data travels directly between your devices through Tailscale's encrypted WireGuard tunnel.
 
 Forked from [weishh/cliplink](https://github.com/weishh/cliplink) with multi-peer auto-sync, deduplication, and automatic tailnet peer discovery.
 
 ## Features
 
-- **Zero-config setup** — run `clipsync daemon` and it auto-discovers peers on your tailnet
+- **One command per machine** — setup scripts for Linux, macOS and Windows build, configure, install the background service and verify it
 - **Automatic background sync** — daemon watches for clipboard changes and broadcasts to all peers (event-driven on Wayland and macOS, polling on X11 and Windows)
 - **Clipboard history** — browse recent clipboard items with `clipsync history`
 - **Multi-peer** — sync across 2+ machines simultaneously
@@ -38,113 +38,176 @@ Each machine runs a daemon that:
 3. Discovers other clipsync peers on the tailnet automatically
 4. Broadcasts changes to all reachable peers
 
-## Installation
+## Setup
 
-### Pre-built binaries (Linux & Windows only)
+Every machine runs the same daemon. Setting up a group of machines takes three steps:
 
-Grab the latest release for Linux or Windows:
+1. Put every machine on the same tailnet.
+2. Run the setup script on the first machine. It creates a shared token.
+3. Run the setup script on every other machine with that token and the first machine's address. Then re-run it on the first machine with the others' addresses.
+
+Each setup script checks prerequisites, builds and installs `clipsync`, writes the config, installs the background service for that OS, and verifies it. It's safe to re-run, which is also how you update.
+
+> Using an AI agent to install it? Point it at [AGENTS.md](AGENTS.md).
+
+### Requirements
+
+| | Linux (Wayland) | Linux (X11) | macOS | Windows |
+|---|---|---|---|---|
+| [Tailscale](https://tailscale.com/download), logged in | ✓ | ✓ | ✓ | ✓ |
+| Go 1.24+ ([go.dev/dl](https://go.dev/dl/)) | ✓ | ✓ | ✓ (`brew install go`) | optional: without it the latest release is downloaded |
+| C compiler | ✓ | ✓ | Xcode CLT (`xcode-select --install`) | – |
+| X11 headers (build only) | ✓ | ✓ | – | – |
+| [wl-clipboard](https://github.com/bugaevc/wl-clipboard) (runtime) | ✓ | – | – | – |
+| Service manager | systemd user session | systemd user session | launchd (built in) | Startup folder (built in) |
+
+Packages for the Linux rows:
 
 ```bash
-# Linux (amd64)
-curl -LO https://github.com/YOURUSER/clipsync/releases/latest/download/clipsync-linux-amd64
-chmod +x clipsync-linux-amd64
-sudo mv clipsync-linux-amd64 /usr/local/bin/clipsync
-
-# Windows (PowerShell)
-# Download clipsync-windows-amd64.exe from the releases page
+sudo pacman -S --needed go base-devel libx11 wl-clipboard          # Arch / Omarchy
+sudo apt install golang-go build-essential libx11-dev wl-clipboard # Debian / Ubuntu (if its golang-go is older than 1.24, use go.dev/dl)
+sudo dnf install golang gcc libX11-devel wl-clipboard              # Fedora
 ```
 
-### One-command install on Windows
+### 1. Tailscale on every machine
 
-If you're on Windows, you can install clipsync with one command after downloading the binary:
+Install Tailscale, log in with the same account, and note each machine's address:
 
+```bash
+tailscale ip -4      # e.g. 100.87.233.53
+```
+
+MagicDNS names (e.g. `my-macbook`) also work as peer addresses.
+
+### 2. First machine
+
+Clone the repo and run the script for your OS. With no existing config, it generates a token and prints it.
+
+**Linux**
+```bash
+git clone https://github.com/squispeb/clipsync.git && cd clipsync
+./scripts/setup-linux.sh
+```
+
+**macOS**
+```bash
+git clone https://github.com/squispeb/clipsync.git && cd clipsync
+./scripts/setup-mac.sh
+```
+
+**Windows** (PowerShell, no admin; no git? download the ZIP from GitHub and run the script from the extracted folder)
 ```powershell
-clipsync install
+git clone https://github.com/squispeb/clipsync.git; cd clipsync
+powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows.ps1
 ```
 
-It installs to `%LOCALAPPDATA%\ClipSync\clipsync.exe` and adds that folder to your user PATH.
+You can print the token again at any time with `clipsync token`.
 
-If you want a proper package manager install, see `docs/winget.md`.
+### 3. Every other machine
 
-> **macOS users:** The clipboard library (`golang.design/x/clipboard`) requires CGO on macOS, so cross-compiled release binaries won't work. You must build from source on a Mac (see below).
+Pass the token and the first machine's address:
 
-### Build from source
-
-Requires Go 1.23+ and platform-specific clipboard dependencies.
-
-**Linux prerequisites:**
-
-On Wayland, clipsync uses [wl-clipboard](https://github.com/bugaevc/wl-clipboard) at runtime (the X11 clipboard isn't bridged to background clients on compositors such as Hyprland):
 ```bash
-sudo pacman -S wl-clipboard   # Arch
-sudo apt install wl-clipboard # Ubuntu/Debian
+# Linux / macOS
+CLIPSYNC_TOKEN=<token> CLIPSYNC_PEERS=<first-machine-ip> ./scripts/setup-linux.sh   # or setup-mac.sh
+```
+```powershell
+# Windows
+$env:CLIPSYNC_TOKEN = "<token>"; $env:CLIPSYNC_PEERS = "<first-machine-ip>"
+powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows.ps1
 ```
 
-Building still needs the X11 headers (used for the X11 fallback):
+Then go back to the first machine and give it the peer list. The token is kept:
+
 ```bash
-# Arch: libx11 ships the headers
-
-# Ubuntu/Debian
-sudo apt install libx11-dev libxext-dev libxmu-dev libgl1-mesa-dev
-
-# Fedora/RHEL
-sudo dnf install libX11-devel libXext-devel libXmu-devel mesa-libGL-devel
+CLIPSYNC_PEERS=<second-ip>,<third-ip> ./scripts/setup-linux.sh   # or setup-mac.sh / setup-windows.ps1
 ```
 
-**macOS prerequisites:**
-```bash
-# Install Xcode Command Line Tools
-xcode-select --install
+`CLIPSYNC_PEERS` replaces the peer list, so always list every peer that machine should send to.
 
-# Install Go (via Homebrew or from https://go.dev/dl/)
-brew install go
+### 4. Verify
+
+On each machine:
+
+```bash
+clipsync status
+#   100.87.233.53:8275  ok: my-macbook, v0.5.0
 ```
 
-**Build:**
+Then copy text or a screenshot on one machine and paste it on another. Changes are sent as soon as they happen.
+
+### Where things live
+
+| | Binary | Config | Service | Logs |
+|---|---|---|---|---|
+| Linux | `~/.local/bin/clipsync` | `~/.config/clipsync/config.json` | `~/.config/systemd/user/clipsync.service` | `journalctl --user -u clipsync` |
+| macOS | `~/.local/bin/clipsync` | `~/Library/Application Support/clipsync/config.json` | `~/Library/LaunchAgents/com.clipsync.daemon.plist` | `~/Library/Logs/clipsync.log` |
+| Windows | `%LOCALAPPDATA%\ClipSync\clipsync.exe` | `%APPDATA%\clipsync\config.json` | `Startup\ClipSync.lnk` | `%LOCALAPPDATA%\ClipSync\clipsync.log` |
+
+The daemon reads its config only at startup. After editing the config, restart it:
+
 ```bash
-git clone https://github.com/YOURUSER/clipsync.git
-cd clipsync
-
-# Linux / Windows
-make build-linux build-windows
-
-# macOS (must be built natively on a Mac; Makefile auto-detects the Xcode SDK)
-make build-mac-native
-# Binaries in dist/
+systemctl --user restart clipsync                              # Linux
+launchctl kickstart -k gui/$(id -u)/com.clipsync.daemon       # macOS
 ```
 
-## Quick Start (Zero Config)
+On Windows, re-run the setup script.
 
-### 1. Install Tailscale on all devices
+### Updating
 
-Make sure Tailscale is installed, running, and all devices are on the same tailnet.
-
-### 2. Install clipsync on each device
-
-- **Linux / Windows:** Download pre-built binaries from the [releases page](https://github.com/YOURUSER/clipsync/releases).
-- **macOS:** Build from source (see Build from source above). After building, you may need to remove the quarantine attribute:
-  ```bash
-  sudo xattr -d com.apple.quarantine /usr/local/bin/clipsync
-  ```
-
-### 3. Just run the daemon
-
-On **every** device:
 ```bash
+git pull && ./scripts/setup-linux.sh      # or setup-mac.sh / setup-windows.ps1
+```
+
+The config is kept. Keep every machine on the same version: `clipsync status` shows each peer's version.
+
+### Uninstalling
+
+```bash
+# Linux
+systemctl --user disable --now clipsync
+rm ~/.config/systemd/user/clipsync.service ~/.local/bin/clipsync
+rm -r ~/.config/clipsync
+
+# macOS
+launchctl bootout gui/$(id -u)/com.clipsync.daemon
+rm ~/Library/LaunchAgents/com.clipsync.daemon.plist ~/.local/bin/clipsync
+rm -r ~/Library/Application\ Support/clipsync
+```
+```powershell
+# Windows
+Get-Process clipsync -ErrorAction SilentlyContinue | Stop-Process
+Remove-Item "$([Environment]::GetFolderPath('Startup'))\ClipSync.lnk"
+Remove-Item -Recurse "$env:LOCALAPPDATA\ClipSync", "$env:APPDATA\clipsync"
+```
+
+### Without the scripts
+
+```bash
+go install github.com/squispeb/clipsync@latest       # Linux needs a C compiler + X11 headers; macOS needs Xcode CLT
+clipsync init --new-token --peer <other-machine-ip>  # or CLIPSYNC_TOKEN=... clipsync init --peer ...
 clipsync daemon
 ```
 
-That's it. On first run, clipsync creates a default config file and automatically scans your tailnet for other clipsync peers. Within seconds, your clipboards are syncing.
+Then run `clipsync daemon` from your OS's service manager. Templates are in `systemd/` and `launchd/`; on macOS replace `__HOME__` in the plist with your home directory.
 
-### 4. Test it
+Pre-built Linux (amd64/arm64) and Windows binaries are attached to [Releases](https://github.com/squispeb/clipsync/releases). They may lag behind `master`; Wayland support and `clipsync init` need v0.5.0 or later. macOS binaries must be built on a Mac (cgo).
 
-Copy some text on one machine, paste on another. It should just work.
+### Troubleshooting
 
----
+| Symptom | Fix |
+|---|---|
+| `status` says `token mismatch (401)` | The machines have different tokens. Re-run the setup with `CLIPSYNC_TOKEN=$(clipsync token)` taken from a working machine. |
+| `status` says `unreachable` | Check that the peer's daemon is running, and that `tailscale ping <ip>` works. On Windows, allow clipsync through the firewall prompt (private networks). |
+| Linux: log says `clipboard backend: x11` on Wayland | Install `wl-clipboard`, then restart the service. |
+| Linux: service never starts at login | Your session doesn't activate `graphical-session.target`. Either start the compositor through uwsm, GNOME or KDE, or add `exec-once = ~/.local/bin/clipsync daemon` (Hyprland) or the equivalent to your autostart. Make sure `systemctl --user show-environment` lists `WAYLAND_DISPLAY` or `DISPLAY`; if not, add `systemctl --user import-environment WAYLAND_DISPLAY DISPLAY` to your session startup. |
+| macOS: nothing syncs, old `/Library/LaunchDaemons/com.clipsync.daemon.plist` | Root daemons can't reach your pasteboard. Remove that plist and re-run `setup-mac.sh`. |
+| Log says `waiting for a Tailscale IP` | Tailscale isn't connected yet. The daemon continues on its own once it is. |
+| A password didn't sync | Working as intended: copies a password manager marks as secret are skipped. |
 
-## Manual Configuration (Optional)
+## Configuration
 
-If you prefer to explicitly define peers or customize behavior, create a config file:
+`clipsync init` (run by the setup scripts) writes this file; you can also edit it by hand and restart the daemon. It is created readable only by you, since it holds the token.
 
 **Linux:** `~/.config/clipsync/config.json`
 **macOS:** `~/Library/Application Support/clipsync/config.json`
@@ -161,8 +224,8 @@ If you prefer to explicitly define peers or customize behavior, create a config 
   "port": 8275,
   "max_size": 10485760,
   "sync_interval_ms": 500,
-  "token": "",
-  "auto_discover": true,
+  "token": "<48 hex characters from clipsync init --new-token>",
+  "auto_discover": false,
   "history_max_items": 100,
   "history_max_memory_mb": 50
 }
@@ -177,7 +240,7 @@ If you prefer to explicitly define peers or customize behavior, create a config 
 | `max_size` | `10485760` | Max clipboard payload in bytes (10 MB) |
 | `sync_interval_ms` | `500` | How often to poll for changes (X11 and Windows only; Wayland and macOS are event-driven) |
 | `token` | `""` | Shared secret. All peers must use the same token. Strongly recommended: without it any tailnet device can read and replace your clipboard |
-| `auto_discover` | `true` | Automatically discover peers via `tailscale status` |
+| `auto_discover` | `true` | Also discover clipsync peers via `tailscale status` (only ones sharing the token). `clipsync init` turns it off when you list peers |
 | `history_max_items` | `100` | Max clipboard history entries to keep in memory |
 | `history_max_memory_mb` | `50` | Max total memory for history storage (MB) |
 
@@ -189,50 +252,30 @@ If you prefer to explicitly define peers or customize behavior, create a config 
 clipsync <command> [options]
 
 Commands:
+  init        Create or update the config
+    --new-token        Generate and print a new shared token
+    --token <t>        Use this token (or set CLIPSYNC_TOKEN)
+    --peer <host[:port]>  Peer address; repeatable or comma-separated; replaces the list
+    --discover         Also auto-discover peers (on by default when no peers are given)
+    --device <name>    Name shown in logs (default: hostname)
+    --port <n>         Listen port (default 8275)
+  token       Print the configured token
   daemon      Start the clipboard receiver and sync daemon
     --port <n>        Override listen port
     --bind <addr>     Override bind address
     --config <path>   Config file path
     --no-sync         Receive-only mode
     --no-discover     Disable auto-discovery
+    --log-file <path> Append logs to a file instead of stderr
 
   send        Manually broadcast clipboard to all peers
-  status      Check if peer daemons are reachable
+  status      Check that peers are reachable, share the token, and their versions
   peers       List configured peers
   discover    Scan tailnet for clipsync peers
   history     Show clipboard history
     --limit <n>       Number of items to show (default 20)
   version     Print version
 ```
-
-## Running as a Service
-
-### Linux (systemd --user)
-
-The unit starts and stops with your graphical session, so the clipboard is available.
-
-```bash
-install -Dm755 dist/clipsync-linux-amd64 ~/.local/bin/clipsync
-mkdir -p ~/.config/systemd/user
-cp systemd/clipsync.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now clipsync
-journalctl --user -u clipsync -f
-```
-
-### macOS (launchd)
-
-clipsync must run as a per-user LaunchAgent: a system LaunchDaemon (root) can't reach your pasteboard. On the Mac, from the repo:
-
-```bash
-./scripts/setup-mac.sh
-```
-
-It builds natively, installs `~/.local/bin/clipsync` and `~/Library/LaunchAgents/com.clipsync.daemon.plist`, and logs to `~/Library/Logs/clipsync.log`. Restart with `launchctl kickstart -k gui/$(id -u)/com.clipsync.daemon`.
-
-### Windows
-
-Use Task Scheduler to run `clipsync.exe daemon` at startup, or run `clipsync install` once to add it to your user PATH.
 
 ## Clipboard History
 

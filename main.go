@@ -30,6 +30,10 @@ func main() {
 
 	var err error
 	switch os.Args[1] {
+	case "init":
+		err = cmdInit(os.Args[2:])
+	case "token":
+		err = cmdToken(os.Args[2:])
 	case "daemon":
 		err = cmdDaemon(os.Args[2:])
 	case "send":
@@ -65,6 +69,8 @@ func printUsage() {
 	fmt.Println("Usage: clipsync <command> [options]")
 	fmt.Println()
 	fmt.Println("Commands:")
+	fmt.Println("  init       Create or update the config (token, peers); see clipsync init -h")
+	fmt.Println("  token      Print the configured token, for setting up another machine")
 	fmt.Println("  daemon     Start the clipboard receiver and sync daemon")
 	fmt.Println("  send       Manually broadcast clipboard to all peers")
 	fmt.Println("  status     Check if peer daemons are reachable")
@@ -113,7 +119,17 @@ func cmdDaemon(args []string) error {
 	configPath := fs.String("config", "", "config file path")
 	noSync := fs.Bool("no-sync", false, "disable auto-sync (receive-only mode)")
 	noDiscover := fs.Bool("no-discover", false, "disable auto-discovery")
+	logFile := fs.String("log-file", "", "append logs to this file instead of stderr (for background runs on Windows)")
 	fs.Parse(args)
+
+	if *logFile != "" {
+		f, err := os.OpenFile(*logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			return fmt.Errorf("log file: %w", err)
+		}
+		defer f.Close()
+		log.SetOutput(f)
+	}
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
@@ -315,13 +331,28 @@ func cmdStatus(args []string) error {
 			allOK = false
 			continue
 		}
-		body, _ := io.ReadAll(resp.Body)
+		var health struct {
+			Service string `json:"service"`
+			Device  string `json:"device"`
+			Version string `json:"version"`
+		}
+		json.NewDecoder(io.LimitReader(resp.Body, 1024)).Decode(&health)
 		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			fmt.Printf("  %s  ok (%s)\n", peer, string(body))
-		} else {
+		switch {
+		case resp.StatusCode == http.StatusUnauthorized:
+			fmt.Printf("  %s  token mismatch (401): both machines need the same token\n", peer)
+			allOK = false
+		case resp.StatusCode != http.StatusOK:
 			fmt.Printf("  %s  error %d\n", peer, resp.StatusCode)
 			allOK = false
+		case health.Service != "clipsync":
+			fmt.Printf("  %s  ok, but not clipsync 0.5+ (upgrade it)\n", peer)
+		default:
+			note := ""
+			if health.Version != version {
+				note = fmt.Sprintf(" (this machine runs v%s)", version)
+			}
+			fmt.Printf("  %s  ok: %s, v%s%s\n", peer, health.Device, health.Version, note)
 		}
 	}
 

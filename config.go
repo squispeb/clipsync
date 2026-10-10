@@ -133,14 +133,19 @@ func ConfigPath() string {
 	return filepath.Join(home, ".config", "clipsync", "config.json")
 }
 
-// SaveConfig writes the config to disk as formatted JSON.
+// SaveConfig writes the config to disk as formatted JSON, readable only by
+// the owner since it holds the token.
 func SaveConfig(path string, cfg Config) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("write config: %w", err)
+	}
+	// WriteFile keeps the mode of an existing file.
+	if err := os.Chmod(path, 0600); err != nil {
+		return fmt.Errorf("chmod config: %w", err)
 	}
 	return nil
 }
