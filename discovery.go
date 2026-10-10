@@ -10,7 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+	"sort"
+	"sync"
 	"time"
 )
 
@@ -58,9 +59,8 @@ func DiscoverPeers(port int, token string, timeout time.Duration) ([]string, err
 		},
 	}
 
-	var peers []string
+	var candidates []string
 	seen := make(map[string]bool)
-
 	for _, peer := range status.Peer {
 		if !peer.Online {
 			continue
@@ -75,20 +75,39 @@ func DiscoverPeers(port int, token string, timeout time.Duration) ([]string, err
 				continue
 			}
 			addr := fmt.Sprintf("%s:%d", ip, port)
-			if seen[addr] {
-				continue
-			}
-			seen[addr] = true
-
-			if isClipSyncPeer(httpClient, addr, token) {
-				peers = append(peers, addr)
+			if !seen[addr] {
+				seen[addr] = true
+				candidates = append(candidates, addr)
 			}
 		}
 	}
 
+	// Probe in parallel: offline or firewalled peers each take the full
+	// timeout, and startup waits for discovery.
+	var (
+		mu    sync.Mutex
+		wg    sync.WaitGroup
+		peers []string
+	)
+	for _, addr := range candidates {
+		wg.Add(1)
+		go func(addr string) {
+			defer wg.Done()
+			if isClipSyncPeer(httpClient, addr, token) {
+				mu.Lock()
+				peers = append(peers, addr)
+				mu.Unlock()
+			}
+		}(addr)
+	}
+	wg.Wait()
+	sort.Strings(peers)
 	return peers, nil
 }
 
+// isClipSyncPeer accepts only a /health reply that identifies itself as
+// clipsync. Anything else on the port (another web server answering "ok")
+// would otherwise receive every clipboard copy.
 func isClipSyncPeer(client *http.Client, addr, token string) bool {
 	url := fmt.Sprintf("http://%s/health", addr)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -108,9 +127,14 @@ func isClipSyncPeer(client *http.Client, addr, token string) bool {
 		return false
 	}
 
-	// Quick sanity check: read a bit of body to ensure it's JSON
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-	return strings.Contains(string(body), `"status"`) || strings.Contains(string(body), "ok")
+	var health struct {
+		Status  string `json:"status"`
+		Service string `json:"service"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1024)).Decode(&health); err != nil {
+		return false
+	}
+	return health.Status == "ok" && health.Service == "clipsync"
 }
 
 // EnsureConfig creates a default config file if it doesn't exist.

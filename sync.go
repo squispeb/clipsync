@@ -68,7 +68,21 @@ func (e *SyncEngine) Start(ctx context.Context) {
 	if peerCount == 0 {
 		log.Println("sync engine: no peers configured, only receiving")
 	}
-	log.Printf("sync engine started (%d peers, interval %v)", peerCount, e.interval)
+
+	// Whatever is on the clipboard at startup was not copied just now, so
+	// don't push it over the peers' clipboards on every daemon restart.
+	e.prime()
+
+	if w, ok := e.board.(Watcher); ok {
+		log.Printf("sync engine started (%d peers, watching for changes)", peerCount)
+		for range w.Watch(ctx) {
+			e.syncOnce()
+		}
+		log.Println("sync engine stopping...")
+		return
+	}
+
+	log.Printf("sync engine started (%d peers, polling every %v)", peerCount, e.interval)
 	ticker := time.NewTicker(e.interval)
 	defer ticker.Stop()
 
@@ -81,6 +95,18 @@ func (e *SyncEngine) Start(ctx context.Context) {
 			e.syncOnce()
 		}
 	}
+}
+
+// prime records the current clipboard content as already seen.
+func (e *SyncEngine) prime() {
+	data, _, err := readClipboard(e.board)
+	if err != nil {
+		return
+	}
+	h := hashContent(data)
+	e.mu.Lock()
+	e.lastLocalHash = h
+	e.mu.Unlock()
 }
 
 func (e *SyncEngine) syncOnce() {

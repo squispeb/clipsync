@@ -1,6 +1,6 @@
 .PHONY: build build-mac build-mac-native build-linux build-windows build-windows-portable test clean
 
-VERSION := 0.4.0
+VERSION := 0.5.0
 BINARY  := clipsync
 
 # macOS SDK path for CGO (required on modern macOS where headers moved into the SDK)

@@ -26,8 +26,8 @@ func TestHandleClipboard_Text(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", rr.Code, http.StatusOK, rr.Body.String())
 	}
-	if string(board.text) != "hello world" {
-		t.Errorf("clipboard text = %q, want %q", string(board.text), "hello world")
+	if got := board.waitWritten(); string(got) != "hello world" {
+		t.Errorf("clipboard text = %q, want %q", string(got), "hello world")
 	}
 }
 
@@ -45,8 +45,8 @@ func TestHandleClipboard_Image(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", rr.Code, http.StatusOK, rr.Body.String())
 	}
-	if len(board.image) != 4 {
-		t.Errorf("clipboard image length = %d, want 4", len(board.image))
+	if got := board.waitWritten(); len(got) != 4 {
+		t.Errorf("clipboard image length = %d, want 4", len(got))
 	}
 }
 
@@ -180,7 +180,47 @@ func TestHandleHealth(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
 	}
-	if !strings.Contains(rr.Body.String(), "ok") {
-		t.Errorf("health body = %q, want to contain 'ok'", rr.Body.String())
+	if !strings.Contains(rr.Body.String(), `"service":"clipsync"`) {
+		t.Errorf("health body = %q, want to identify as clipsync", rr.Body.String())
+	}
+}
+
+func TestHandleHealth_RequiresToken(t *testing.T) {
+	srv := NewServer(&MockBoard{}, "127.0.0.1", 8275, 1024, "secret", "", nil, "", nil)
+
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("without token: status = %d, want %d", rr.Code, http.StatusUnauthorized)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req.Header.Set("X-ClipSync-Token", "secret")
+	rr = httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("with token: status = %d, want %d", rr.Code, http.StatusOK)
+	}
+}
+
+func TestIsClipSyncPeer(t *testing.T) {
+	clipsync := httptest.NewServer(NewServer(&MockBoard{}, "127.0.0.1", 0, 1024, "secret", "", nil, "", nil))
+	defer clipsync.Close()
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"status":"ok"}`)
+	}))
+	defer other.Close()
+
+	addr := func(s *httptest.Server) string { return strings.TrimPrefix(s.URL, "http://") }
+	client := &http.Client{}
+
+	if !isClipSyncPeer(client, addr(clipsync), "secret") {
+		t.Error("clipsync peer with matching token was rejected")
+	}
+	if isClipSyncPeer(client, addr(clipsync), "wrong") {
+		t.Error("clipsync peer with a different token was accepted")
+	}
+	if isClipSyncPeer(client, addr(other), "secret") {
+		t.Error("non-clipsync server answering ok was accepted")
 	}
 }

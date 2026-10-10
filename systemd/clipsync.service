@@ -1,7 +1,10 @@
 [Unit]
 Description=ClipSync - Tailscale Clipboard Sync Daemon
-After=network-online.target tailscaled.service
-Wants=network-online.target
+# The clipboard belongs to the graphical session: start with it (so
+# WAYLAND_DISPLAY/DISPLAY are set) and stop with it.
+PartOf=graphical-session.target
+After=graphical-session.target tailscaled.service
+Requisite=graphical-session.target
 
 [Service]
 Type=simple
@@ -10,4 +13,4 @@ Restart=on-failure
 RestartSec=5
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target

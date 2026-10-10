@@ -1,25 +1,27 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 type Config struct {
-	Peers          []string `json:"peers"`
-	Bind           string   `json:"bind"`
-	Port           int      `json:"port"`
-	MaxSize        int64    `json:"max_size"`
-	SyncInterval   int      `json:"sync_interval_ms"`
-	Token          string   `json:"token"`
-	DeviceName     string   `json:"device_name"`
-	AutoDiscover   bool     `json:"auto_discover"`
-	HistoryItems   int      `json:"history_max_items"`
-	HistoryMemory  int64    `json:"history_max_memory_mb"`
+	Peers         []string `json:"peers"`
+	Bind          string   `json:"bind"`
+	Port          int      `json:"port"`
+	MaxSize       int64    `json:"max_size"`
+	SyncInterval  int      `json:"sync_interval_ms"`
+	Token         string   `json:"token"`
+	DeviceName    string   `json:"device_name"`
+	AutoDiscover  bool     `json:"auto_discover"`
+	HistoryItems  int      `json:"history_max_items"`
+	HistoryMemory int64    `json:"history_max_memory_mb"`
 }
 
 func DefaultConfig() Config {
@@ -39,17 +41,13 @@ func isTailscaleIP(ip net.IP) bool {
 	return ip4 != nil && ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127
 }
 
-func ResolveBind(bind string) string {
-	if bind != "" {
-		return bind
-	}
-
+// TailscaleIP returns this machine's Tailscale IPv4 address, if the tailnet
+// interface is up.
+func TailscaleIP() (string, bool) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		log.Printf("WARNING: cannot list interfaces: %v; binding to 127.0.0.1", err)
-		return "127.0.0.1"
+		return "", false
 	}
-
 	for _, iface := range ifaces {
 		addrs, err := iface.Addrs()
 		if err != nil {
@@ -61,15 +59,45 @@ func ResolveBind(bind string) string {
 				continue
 			}
 			if isTailscaleIP(ipNet.IP) {
-				ip := ipNet.IP.To4()
-				log.Printf("auto-detected Tailscale IP: %s", ip.String())
-				return ip.String()
+				return ipNet.IP.To4().String(), true
 			}
 		}
 	}
+	return "", false
+}
 
+func ResolveBind(bind string) string {
+	if bind != "" {
+		return bind
+	}
+	if ip, ok := TailscaleIP(); ok {
+		log.Printf("auto-detected Tailscale IP: %s", ip)
+		return ip
+	}
 	log.Println("WARNING: Tailscale IP not detected; binding to 127.0.0.1 (only local access)")
 	return "127.0.0.1"
+}
+
+// WaitForTailscaleIP blocks until the Tailscale interface has an address.
+// At login the daemon can start before tailscaled is up; binding to 127.0.0.1
+// then would leave it running but unreachable until restarted.
+func WaitForTailscaleIP(ctx context.Context) (string, error) {
+	logged := false
+	for {
+		if ip, ok := TailscaleIP(); ok {
+			log.Printf("auto-detected Tailscale IP: %s", ip)
+			return ip, nil
+		}
+		if !logged {
+			log.Println("waiting for a Tailscale IP (set \"bind\" to listen elsewhere)...")
+			logged = true
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 func LoadConfig(path string) (Config, error) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -70,9 +71,14 @@ func (c *Client) sendData(data []byte, contentType string) error {
 	return nil
 }
 
+var errSensitive = errors.New("clipboard content is marked sensitive by a password manager; not sending")
+
 // readClipboard reads the system clipboard content.
-// Priority: text first, then image.
+// Priority: text first, then image. Content marked sensitive is refused.
 func readClipboard(board Board) (data []byte, contentType string, err error) {
+	if s, ok := board.(SensitiveChecker); ok && s.Sensitive() {
+		return nil, "", errSensitive
+	}
 	text, textErr := board.ReadText()
 	if textErr == nil && len(text) > 0 {
 		return text, "text/plain; charset=utf-8", nil

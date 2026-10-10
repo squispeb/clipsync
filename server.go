@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,17 +14,17 @@ import (
 )
 
 type Server struct {
-	board      Board
-	maxSize    int64
-	bind       string
-	port       int
-	token      string
-	version    string
-	history    *History
-	device     string
-	onReceive  func(data []byte, contentType string)
-	mux        *http.ServeMux
-	httpSrv    *http.Server
+	board     Board
+	maxSize   int64
+	bind      string
+	port      int
+	token     string
+	version   string
+	history   *History
+	device    string
+	onReceive func(data []byte, contentType string)
+	mux       *http.ServeMux
+	httpSrv   *http.Server
 }
 
 func NewServer(board Board, bind string, port int, maxSize int64, token string, version string, history *History, device string, onReceive func(data []byte, contentType string)) *Server {
@@ -63,11 +64,9 @@ func (s *Server) handleClipboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.token != "" {
-		if r.Header.Get("X-ClipSync-Token") != s.token {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
+	if !s.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
 	}
 
 	if r.ContentLength > s.maxSize {
@@ -134,11 +133,9 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.token != "" {
-		if r.Header.Get("X-ClipSync-Token") != s.token {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
+	if !s.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
 	}
 
 	if s.history == nil {
@@ -162,9 +159,30 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleHealth identifies this daemon as clipsync for status checks and
+// discovery. With a token configured it requires the token too, so discovery
+// only picks up peers that share it.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"status":"ok","time":"%s"}`, time.Now().Format(time.RFC3339))
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "ok",
+		"service": "clipsync",
+		"version": s.version,
+		"device":  s.device,
+		"time":    time.Now().Format(time.RFC3339),
+	})
+}
+
+func (s *Server) authorized(r *http.Request) bool {
+	if s.token == "" {
+		return true
+	}
+	got := r.Header.Get("X-ClipSync-Token")
+	return subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) == 1
 }
 
 func (s *Server) ListenAndServe() error {

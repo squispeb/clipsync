@@ -11,13 +11,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 )
 
-const version = "0.4.0"
+// Overridden at build time with -ldflags "-X main.version=...".
+var version = "0.5.0"
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -124,9 +125,22 @@ func cmdDaemon(args []string) error {
 	if *bind != "" {
 		cfg.Bind = *bind
 	}
-	cfg.Bind = ResolveBind(cfg.Bind)
 
-	board, err := NewSystemBoard()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if cfg.Bind == "" {
+		ip, err := WaitForTailscaleIP(ctx)
+		if err != nil {
+			return nil
+		}
+		cfg.Bind = ip
+	}
+	if cfg.Token == "" {
+		log.Println("WARNING: no token set; any device on your tailnet can read and replace this clipboard")
+	}
+
+	board, err := NewBoard()
 	if err != nil {
 		return fmt.Errorf("clipboard init: %w", err)
 	}
@@ -161,9 +175,6 @@ func cmdDaemon(args []string) error {
 	history := NewHistory(cfg.HistoryItems, cfg.HistoryMemory*1024*1024)
 	engine := NewSyncEngine(board, cfg, history, version)
 	srv := NewServer(board, cfg.Bind, cfg.Port, cfg.MaxSize, cfg.Token, version, history, cfg.DeviceName, engine.OnRemoteContent)
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	go func() {
 		<-ctx.Done()
@@ -241,7 +252,7 @@ func cmdSend(args []string) error {
 		return fmt.Errorf("no peers configured (run daemon first, or use --no-discover with explicit peers)")
 	}
 
-	board, err := NewSystemBoard()
+	board, err := NewBoard()
 	if err != nil {
 		return fmt.Errorf("clipboard init: %w", err)
 	}
