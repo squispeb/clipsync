@@ -71,7 +71,15 @@ sed "s|__HOME__|$HOME|g" "launchd/$LABEL.plist" > "$PLIST"
 
 # Only look at log lines written by this start.
 seen=$(wc -l < "$LOG" 2>/dev/null || echo 0)
-launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+    launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+    # bootout returns before the job is gone; bootstrapping too early fails
+    # with "Bootstrap failed: 5: Input/output error".
+    for _ in $(seq 1 50); do
+        launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 || break
+        sleep 0.1
+    done
+fi
 launchctl bootstrap "$DOMAIN" "$PLIST"
 
 echo "[5/5] Verifying..."
