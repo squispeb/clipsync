@@ -28,6 +28,7 @@ type SyncEngine struct {
 	peers          []string
 	lastLocalHash  string
 	lastRemoteHash string
+	lastTooLarge   string
 }
 
 func NewSyncEngine(board Board, cfg Config, history *History, version string) *SyncEngine {
@@ -114,11 +115,18 @@ func (e *SyncEngine) syncOnce() {
 	if err != nil {
 		return
 	}
+	h := hashContent(data)
 	if int64(len(data)) > e.maxSize {
+		// Polling boards call this every interval: log each item once.
+		e.mu.Lock()
+		first := h != e.lastTooLarge
+		e.lastTooLarge = h
+		e.mu.Unlock()
+		if first {
+			log.Printf("clipboard changed (%s, %d bytes) but is over max_size (%d bytes), not sent", contentType, len(data), e.maxSize)
+		}
 		return
 	}
-
-	h := hashContent(data)
 
 	e.mu.Lock()
 	isNewLocal := h != e.lastLocalHash && h != e.lastRemoteHash

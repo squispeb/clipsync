@@ -4,13 +4,34 @@ package main
 
 /*
 #cgo CFLAGS: -x objective-c -fobjc-arc
-#cgo LDFLAGS: -framework AppKit -framework Foundation
+#cgo LDFLAGS: -framework AppKit -framework Foundation -framework UniformTypeIdentifiers
 #import <AppKit/AppKit.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <stdlib.h>
 #include <string.h>
 
 static long cs_change_count(void) {
 	return (long)[[NSPasteboard generalPasteboard] changeCount];
+}
+
+// The pasteboard's types as one hash, to notice formats added after the
+// changeCount bump.
+static long cs_types_hash(void) {
+	@autoreleasepool {
+		NSArray<NSPasteboardType> *types = [[NSPasteboard generalPasteboard] types];
+		return (long)[[types componentsJoinedByString:@"\n"] hash];
+	}
+}
+
+// A single image file copied in Finder. The pasteboard then also holds the
+// file name as text and the file's icon as TIFF, neither of which is wanted.
+static NSURL *cs_image_file(NSPasteboard *pb) {
+	NSArray<NSURL *> *urls = [pb readObjectsForClasses:@[[NSURL class]]
+	                                           options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
+	if (urls.count != 1) return nil;
+	UTType *type = nil;
+	[urls[0] getResourceValue:&type forKey:NSURLContentTypeKey error:nil];
+	return [type conformsToType:UTTypeImage] ? urls[0] : nil;
 }
 
 // Markers set by password managers (nspasteboard.org).
@@ -35,17 +56,35 @@ static void *cs_copy_bytes(NSData *d, int *len) {
 
 static void *cs_read_text(int *len) {
 	@autoreleasepool {
-		NSString *s = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+		NSPasteboard *pb = [NSPasteboard generalPasteboard];
+		if (cs_image_file(pb) != nil) {
+			*len = 0;
+			return NULL;
+		}
+		NSString *s = [pb stringForType:NSPasteboardTypeString];
 		return cs_copy_bytes([s dataUsingEncoding:NSUTF8StringEncoding], len);
 	}
 }
 
-// PNG if offered, otherwise TIFF (what many Mac apps put on the pasteboard)
-// converted to PNG.
+// A copied image file (PNG as is, other formats converted), otherwise PNG if
+// offered, otherwise TIFF (what many Mac apps put on the pasteboard) converted
+// to PNG.
 static void *cs_read_png(int *len) {
 	@autoreleasepool {
 		NSPasteboard *pb = [NSPasteboard generalPasteboard];
-		NSData *d = [pb dataForType:NSPasteboardTypePNG];
+		NSData *d = nil;
+		NSURL *file = cs_image_file(pb);
+		if (file != nil) {
+			UTType *type = nil;
+			[file getResourceValue:&type forKey:NSURLContentTypeKey error:nil];
+			d = [NSData dataWithContentsOfURL:file];
+			if (d != nil && ![type conformsToType:UTTypePNG]) {
+				NSBitmapImageRep *rep = [NSBitmapImageRep imageRepWithData:d];
+				d = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+			}
+			return cs_copy_bytes(d, len);
+		}
+		d = [pb dataForType:NSPasteboardTypePNG];
 		if (d == nil) {
 			NSData *tiff = [pb dataForType:NSPasteboardTypeTIFF];
 			if (tiff != nil) {
@@ -95,6 +134,12 @@ type DarwinBoard struct {
 // How often changeCount is checked. Reading the counter costs no content
 // transfer, so this can be much tighter than the polling sync interval.
 const darwinWatchInterval = 200 * time.Millisecond
+
+// Apps may add formats after the changeCount bump: Chrome clears the
+// pasteboard, writes the HTML, and writes the image only once it is
+// PNG-encoded, which takes longer than darwinWatchInterval for large images.
+// For this long after a change, a change in the list of types also signals.
+const darwinSettleWindow = 5 * time.Second
 
 func NewBoard() (Board, error) {
 	return &DarwinBoard{}, nil
@@ -162,12 +207,21 @@ func (b *DarwinBoard) Sensitive() bool {
 	return C.cs_sensitive() != 0
 }
 
-// Watch signals once at startup and then whenever changeCount moves.
+// Watch signals once at startup, whenever changeCount moves, and whenever the
+// list of types changes within darwinSettleWindow of a changeCount move.
 func (b *DarwinBoard) Watch(ctx context.Context) <-chan struct{} {
 	ch := make(chan struct{}, 1)
+	signal := func() {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 	go func() {
 		defer close(ch)
 		last := C.cs_change_count()
+		var types C.long
+		var settleUntil time.Time
 		ch <- struct{}{}
 		ticker := time.NewTicker(darwinWatchInterval)
 		defer ticker.Stop()
@@ -175,12 +229,16 @@ func (b *DarwinBoard) Watch(ctx context.Context) <-chan struct{} {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case now := <-ticker.C:
 				if n := C.cs_change_count(); n != last {
 					last = n
-					select {
-					case ch <- struct{}{}:
-					default:
+					types = C.cs_types_hash()
+					settleUntil = now.Add(darwinSettleWindow)
+					signal()
+				} else if now.Before(settleUntil) {
+					if t := C.cs_types_hash(); t != types {
+						types = t
+						signal()
 					}
 				}
 			}
